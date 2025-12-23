@@ -1,0 +1,2 @@
+Preamble,Checksum,Baud,Parity,StopBits,Timeout,TxStart,RxStart,TxDecimals
+,CRC16_MODBUS,2000000,N,1,1000,!,#,0
