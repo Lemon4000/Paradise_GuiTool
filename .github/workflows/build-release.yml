@@ -25,30 +25,70 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller pyside6 pillow pyserial
+          python -m pip install pyinstaller pyside6 pillow pyserial openpyxl
 
       - name: Build EXE (one-file)
         shell: pwsh
         run: |
-          python -m PyInstaller -F --noconsole --icon "ICON.png" -n UsartGUI gui/main.py --add-data "config;config" --hidden-import serial.tools.list_ports_windows --hidden-import serial.tools.list_ports --runtime-tmpdir . --clean
+          python -m PyInstaller -F --noconsole --icon "ICON.png" -n UsartGUI gui/main.py --add-data "config;config" --add-data "gui/resources;gui/resources" --hidden-import serial.tools.list_ports_windows --hidden-import serial.tools.list_ports --runtime-tmpdir . --clean
 
       - name: Package zip
         shell: pwsh
         run: |
-          $zipPath = "dist/UsartGUI_build_${env:BUILD_NUM}.zip"
-          # Ensure config is present beside exe (PyInstaller copies due to add-data; keep both exe and config)
-          Compress-Archive -Path "dist/UsartGUI.exe","dist/config" -DestinationPath $zipPath -Force
+          # Get version from version.py
+          $versionContent = Get-Content "version.py" -Raw
+          if ($versionContent -match '__version__\s*=\s*"([^"]+)"') {
+            $version = $matches[1]
+          } else {
+            $version = "1.0.0"
+          }
+          
+          # Get commit message (first line)
+          $commitMsg = "${{ github.event.head_commit.message }}" -split "`n" | Select-Object -First 1
+          $commitMsg = $commitMsg -replace '[<>:"/\\|?*]', '_'  # Remove invalid filename chars
+          $commitMsg = $commitMsg.Substring(0, [Math]::Min(50, $commitMsg.Length))  # Limit length
+          
+          $zipName = "Paradise_GuiToolV${version}-${commitMsg}.zip"
+          $zipPath = "dist/$zipName"
+          
+          # Package exe and config
+          Compress-Archive -Path "dist/UsartGUI.exe","config" -DestinationPath $zipPath -Force
           Write-Host "Packaged -> $zipPath"
+          
+          # Save for next step
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+          echo "VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ env.BUILD_NUM }}
-          name: "Build #${{ env.BUILD_NUM }}"
+          tag_name: v${{ env.VERSION }}-build${{ env.BUILD_NUM }}
+          name: "Paradise GuiTool V${{ env.VERSION }} - ${{ github.event.head_commit.message }}"
           draft: false
           prerelease: false
+          body: |
+            ## Paradise GuiTool V${{ env.VERSION }}
+            
+            ### ? 功能特性
+            - ? 电调参数读写配置
+            - ? 固件烧录（HEX文件）
+            - ? 波特率管理（支持自定义波特率）
+            - ? 配置记忆（自动保存上次使用的波特率和文件路径）
+            - ? 串口自动检测
+            - ? 实时通信日志
+            
+            ### ? 本次更新
+            ${{ github.event.head_commit.message }}
+            
+            ### ? 构建信息
+            - 构建号: #${{ env.BUILD_NUM }}
+            - 提交: ${{ github.sha }}
+            - 构建时间: ${{ github.event.head_commit.timestamp }}
+            
+            ### ? 下载说明
+            下载 `${{ env.ZIP_NAME }}` 并解压即可使用。
           files: |
-            dist/UsartGUI_build_${{ env.BUILD_NUM }}.zip
+            dist/${{ env.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -60,20 +100,28 @@ jobs:
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "新版本已发布: UsartGUI Build #${{ env.BUILD_NUM }}"
+          subject: "新版本已发布: Paradise GuiTool V${{ env.VERSION }}"
           to: ${{ secrets.EMAIL_TO }}
           from: ${{ secrets.SMTP_USERNAME }}
           body: |
             您好！
 
-            编程卡上位机新版本已自动构建完成：
+            Paradise GuiTool 新版本已自动构建完成：
 
-            ? 版本: Build #${{ env.BUILD_NUM }}
-            ? 下载地址: https://github.com/Lemon4000/CoderCard-FKKK/releases/tag/build-${{ env.BUILD_NUM }}
+            ? 版本: V${{ env.VERSION }}
+            ? 构建号: #${{ env.BUILD_NUM }}
+            ? 下载地址: https://github.com/${{ github.repository }}/releases/tag/v${{ env.VERSION }}-build${{ env.BUILD_NUM }}
             ? 构建时间: ${{ github.event.head_commit.timestamp }}
             ? 提交信息: ${{ github.event.head_commit.message }}
+
+            ? 主要功能：
+            - 电调参数读写配置
+            - 固件烧录（HEX文件）
+            - 波特率管理（支持自定义）
+            - 配置记忆功能
+            - 串口自动检测
 
             附件中包含完整的安装包，也可访问上述链接在线下载。
 
             此邮件由 GitHub Actions 自动发送。
-          attachments: dist/UsartGUI_build_${{ env.BUILD_NUM }}.zip
+          attachments: dist/${{ env.ZIP_NAME }}

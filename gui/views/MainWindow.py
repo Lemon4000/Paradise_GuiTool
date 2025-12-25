@@ -7,20 +7,34 @@ from PySide6.QtWidgets import (
 try:
     from gui.models.ParamTableModel import ParamTableModel
     from gui.services.SerialWorker import SerialWorker
+    from gui.services.ConfigManager import ConfigManager
     from gui.views.FlashTab import FlashTab
+    from gui.views.BaudRateManagerDialog import BaudRateManagerDialog
 except Exception:
     import sys, os
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
     from gui.models.ParamTableModel import ParamTableModel
     from gui.services.SerialWorker import SerialWorker
+    from gui.services.ConfigManager import ConfigManager
     from gui.views.FlashTab import FlashTab
+    from gui.views.BaudRateManagerDialog import BaudRateManagerDialog
 import Usart_Para_FK as proto
+
+# Import version info
+try:
+    from version import __version__, __app_name__
+except ImportError:
+    __version__ = "1.0.0"
+    __app_name__ = "Paradise GuiTool"
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('电调参数上位机')
+        self.setWindowTitle(f'{__app_name__} v{__version__}')
         self.resize(1000, 680)
+        
+        # 初始化配置管理器
+        self.config_manager = ConfigManager()
 
         self.portBox = QComboBox()
         self.portBox.setMinimumWidth(250)  # 增加宽度以显示详细信息
@@ -37,34 +51,32 @@ class MainWindow(QMainWindow):
         baudLayout.setContentsMargins(0, 0, 0, 0)
         baudLayout.setSpacing(5)
         
-        # 波特率下拉框（仅包含预设值）
+        # 波特率下拉框（可编辑）
         self.baudBox = QComboBox()
-        self.baudBox.addItems(['9600','19200','38400','57600','115200','230400','460800','921600','2000000'])
-        self.baudBox.setToolTip('选择预设波特率')
-        
-        # 自定义波特率标签
-        self.customBaudLabel = QLabel('或输入:')
-        self.customBaudLabel.setVisible(False)
-        
-        # 自定义波特率输入框
-        self.customBaudInput = QLineEdit()
-        self.customBaudInput.setPlaceholderText('自定义波特率 (300-3000000)')
-        self.customBaudInput.setMaximumWidth(140)
-        self.customBaudInput.setValidator(QIntValidator(300, 3000000))
-        self.customBaudInput.setVisible(False)
-        self.customBaudInput.setToolTip('输入自定义波特率值')
+        # 从配置管理器加载波特率列表
+        baud_rates = self.config_manager.get_baud_rates()
+        self.baudBox.addItems([str(b) for b in baud_rates])
+        self.baudBox.setEditable(False)  # 初始为不可编辑（预设模式）
+        self.baudBox.setInsertPolicy(QComboBox.NoInsert)  # 防止将自定义值插入列表
+        self.baudBox.lineEdit().setValidator(QIntValidator(300, 3000000)) if self.baudBox.lineEdit() else None
+        self.baudBox.setMinimumWidth(100)
+        self.baudBox.setToolTip('选择预设波特率或输入自定义值')
         
         # 自定义波特率切换按钮
         self.customBaudBtn = QPushButton('自定义')
         self.customBaudBtn.setMaximumWidth(65)
         self.customBaudBtn.setCheckable(True)
-        self.customBaudBtn.setToolTip('切换到自定义波特率')
+        self.customBaudBtn.setToolTip('切换到自定义波特率输入')
+        
+        # 波特率管理按钮
+        self.manageBaudBtn = QPushButton('⚙')
+        self.manageBaudBtn.setMaximumWidth(30)
+        self.manageBaudBtn.setToolTip('管理波特率列表')
         
         baudLayout.addWidget(QLabel('波特率:'))
         baudLayout.addWidget(self.baudBox)
         baudLayout.addWidget(self.customBaudBtn)
-        baudLayout.addWidget(self.customBaudLabel)
-        baudLayout.addWidget(self.customBaudInput)
+        baudLayout.addWidget(self.manageBaudBtn)
         
         baudWidget = QWidget()
         baudWidget.setLayout(baudLayout)
@@ -115,8 +127,8 @@ class MainWindow(QMainWindow):
         param_layout = QVBoxLayout(param_tab)
         param_layout.addWidget(self.table)
 
-        # 固件烧录标签页（传入主窗口以启用可浮动日志）
-        self.flash_tab = FlashTab(self)
+        # 固件烧录标签页（传入主窗口和配置管理器）
+        self.flash_tab = FlashTab(self, self.config_manager)
 
         # 创建标签控件
         self.tab_widget = QTabWidget()
@@ -191,13 +203,18 @@ class MainWindow(QMainWindow):
         self._bindSignals()
         self._refreshPorts()
         self._updateButtons(False)
-        try:
-            cfg = proto._read_protocol_cfg()
-            b = cfg.get('Baud','2000000')
-            idx = self.baudBox.findText(str(b))
-            self.baudBox.setCurrentIndex(idx if idx != -1 else self.baudBox.findText('2000000'))
-        except Exception:
-            self.baudBox.setCurrentIndex(self.baudBox.findText('2000000'))
+        
+        # 从配置管理器加载上次使用的波特率
+        last_baud = self.config_manager.get_last_baud_rate()
+        idx = self.baudBox.findText(str(last_baud))
+        if idx != -1:
+            self.baudBox.setCurrentIndex(idx)
+        else:
+            # 如果找不到，使用默认值
+            default_baud = self.config_manager.get_default_baud_rate()
+            idx = self.baudBox.findText(str(default_baud))
+            if idx != -1:
+                self.baudBox.setCurrentIndex(idx)
 
     def _bindSignals(self):
         self.btnConnect.clicked.connect(self._onConnect)
@@ -208,6 +225,7 @@ class MainWindow(QMainWindow):
         self.btnImport.clicked.connect(self._onImport)
         self.btnRefresh.clicked.connect(self._onRefresh)
         self.btnRefreshPort.clicked.connect(self._onRefreshPortClicked)
+        self.manageBaudBtn.clicked.connect(self._onManageBaudRates)
 
         self.worker.sigConnected.connect(self._onConnected)
         self.worker.sigFrameSent.connect(self._onFrameSent)
@@ -225,9 +243,9 @@ class MainWindow(QMainWindow):
         self.worker.sigRecvBreak.connect(self._onRecvBreak)
         self.recvFormat.currentTextChanged.connect(self._onRecvFormatChanged)
         self.sendFormat.currentTextChanged.connect(self._onSendFormatChanged)
-        self.baudBox.currentTextChanged.connect(self._onPresetBaudChange)
+        self.baudBox.currentTextChanged.connect(self._onBaudChange)
+        self.baudBox.editTextChanged.connect(self._onBaudChange)
         self.customBaudBtn.toggled.connect(self._onCustomBaudToggle)
-        self.customBaudInput.textChanged.connect(self._onCustomBaudTextChange)
 
     def _refreshPorts(self):
         """刷新串口列表，保持当前选择"""
@@ -310,34 +328,39 @@ class MainWindow(QMainWindow):
         self.worker.sendExit()
         self.status.showMessage('已发送退出编程', 2000)
 
-    def _onPresetBaudChange(self, text: str):
-        """处理预设波特率选择"""
-        # 只有在非自定义模式下才应用
-        if self.customBaudBtn.isChecked():
+    def _onBaudChange(self, text: str):
+        """处理波特率变化（预设或自定义）"""
+        if not text:
             return
         
         try:
             baud = int(text)
-            self.worker.setBaudRate(baud)
-            self.status.showMessage(f'✓ 波特率已切换为 {baud} bps', 1500)
+            if 300 <= baud <= 3000000:
+                self.worker.setBaudRate(baud)
+                mode = '自定义' if self.customBaudBtn.isChecked() else '预设'
+                self.status.showMessage(f'✓ {mode}波特率 {baud} bps', 1500)
+            else:
+                self.status.showMessage(f'⚠ 波特率范围: 300-3000000 bps', 1500)
         except ValueError:
             pass
 
     def _onCustomBaudToggle(self, checked: bool):
         """处理自定义波特率切换"""
         if checked:
-            # 启用自定义模式
-            self.baudBox.setEnabled(False)
-            self.customBaudLabel.setVisible(True)
-            self.customBaudInput.setVisible(True)
-            self.customBaudBtn.setText('预设 ✓')
-            self.customBaudInput.setFocus()
-            self.customBaudInput.clear()
+            # 启用自定义模式：下拉框变为可编辑输入框
+            current_value = self.baudBox.currentText()
+            self.baudBox.setEditable(True)
+            self.baudBox.setCurrentText(current_value)
+            self.customBaudBtn.setText('预设')
+            # 确保验证器已设置
+            if self.baudBox.lineEdit():
+                self.baudBox.lineEdit().setValidator(QIntValidator(300, 3000000))
+                self.baudBox.lineEdit().setPlaceholderText('输入波特率 (300-3000000)')
+            self.baudBox.setFocus()
+            self.baudBox.lineEdit().selectAll()
         else:
-            # 禁用自定义模式，恢复预设
-            self.baudBox.setEnabled(True)
-            self.customBaudLabel.setVisible(False)
-            self.customBaudInput.setVisible(False)
+            # 禁用自定义模式：恢复为预设下拉框
+            self.baudBox.setEditable(False)
             self.customBaudBtn.setText('自定义')
             # 应用当前预设波特率
             current_baud = self.baudBox.currentText()
@@ -347,27 +370,6 @@ class MainWindow(QMainWindow):
                 self.status.showMessage(f'✓ 切换回预设波特率 {baud} bps', 1500)
             except ValueError:
                 pass
-
-    def _onCustomBaudTextChange(self, text: str):
-        """处理自定义波特率输入变化（实时验证）"""
-        if not self.customBaudBtn.isChecked():
-            return
-        
-        if not text:
-            # 为空，不应用
-            return
-        
-        try:
-            baud = int(text)
-            # QIntValidator已经在初始化时设置了范围，但我们再次验证确保
-            if 300 <= baud <= 3000000:
-                self.worker.setBaudRate(baud)
-                self.status.showMessage(f'✓ 自定义波特率 {baud} bps', 1000)
-            else:
-                self.status.showMessage(f'⚠ 波特率范围: 300-3000000 bps', 1500)
-        except ValueError:
-            # 输入非数字，QValidator会阻止但这里作为备份
-            pass
 
     def _onImport(self):
         path, _ = QFileDialog.getOpenFileName(self, '选择映射文件', 'config', 'Excel/CSV (*.xlsx *.csv)')
@@ -379,6 +381,21 @@ class MainWindow(QMainWindow):
         group = self.groupBox.currentText()
         self.model.reload(group)
         self.status.showMessage('映射已刷新', 2000)
+    
+    def _onManageBaudRates(self):
+        """打开波特率管理对话框"""
+        dialog = BaudRateManagerDialog(self.config_manager, self)
+        if dialog.exec():
+            # 对话框关闭后重新加载波特率列表
+            current_baud = self.baudBox.currentText()
+            self.baudBox.clear()
+            baud_rates = self.config_manager.get_baud_rates()
+            self.baudBox.addItems([str(b) for b in baud_rates])
+            # 尝试恢复之前的选择
+            idx = self.baudBox.findText(current_baud)
+            if idx != -1:
+                self.baudBox.setCurrentIndex(idx)
+            self.status.showMessage('波特率列表已更新', 2000)
 
     def _onConnected(self, ok: bool):
         self._updateButtons(ok)
@@ -528,6 +545,14 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         try:
+            # 保存当前波特率到配置
+            current_baud_text = self.baudBox.currentText()
+            try:
+                current_baud = int(current_baud_text)
+                self.config_manager.set_last_baud_rate(current_baud)
+            except ValueError:
+                pass
+            
             self.worker.shutdown()
         except Exception:
             pass

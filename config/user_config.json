@@ -1,0 +1,18 @@
+{
+    "baud_rates": [
+        9600,
+        19200,
+        38400,
+        57600,
+        76800,
+        115200,
+        230400,
+        460800,
+        921600,
+        2000000
+    ],
+    "default_baud_rate": 230400,
+    "last_baud_rate": 76800,
+    "last_hex_path": "",
+    "custom_baud_rates": []
+}

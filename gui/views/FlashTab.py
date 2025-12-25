@@ -70,9 +70,10 @@ class DropArea(QFrame):
 
 class FlashTab(QWidget):
     """固件烧录标签页"""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, config_manager=None):
         super().__init__(parent)
         self.main_window = parent if isinstance(parent, QMainWindow) else None
+        self.config_manager = config_manager  # 配置管理器
         self.serial_port = None
         self.serial_worker = None  # 串口worker引用
         self.flash_worker = None
@@ -266,21 +267,44 @@ class FlashTab(QWidget):
     def on_browse_clicked(self):
         """浏览文件"""
         from PySide6.QtWidgets import QFileDialog
+        import os
+        
+        # 获取上次使用的目录
+        initial_dir = ""
+        if self.config_manager:
+            last_path = self.config_manager.get_last_hex_path()
+            if last_path and os.path.exists(os.path.dirname(last_path)):
+                initial_dir = os.path.dirname(last_path)
+            elif os.path.exists(last_path):
+                initial_dir = last_path
+        
+        # 如果没有历史路径或路径不存在，使用根目录
+        if not initial_dir:
+            initial_dir = os.getcwd()
+        
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择HEX文件",
-            "",
+            initial_dir,
             "HEX Files (*.hex);;All Files (*.*)"
         )
         if file_path:
             self.on_file_selected(file_path)
             self.drop_area.file_path = file_path
             self.drop_area.label.setText(f"已选择:\n{os.path.basename(file_path)}")
+            
+            # 保存到配置
+            if self.config_manager:
+                self.config_manager.set_last_hex_path(file_path)
 
     def on_file_selected(self, file_path: str):
         """文件选择回调"""
         self.hex_file_path = file_path
         self.status_log_view.append(f"选择文件: {file_path}")
+        
+        # 保存到配置
+        if self.config_manager:
+            self.config_manager.set_last_hex_path(file_path)
 
         # 解析文件获取信息
         try:

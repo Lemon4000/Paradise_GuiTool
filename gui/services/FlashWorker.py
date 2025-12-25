@@ -391,7 +391,10 @@ class FlashWorker(QObject):
         try:
             self.sigLog.emit(f"发送校验命令 (总CRC:0x{self.total_data_crc:04X})...")
             tx_start = (self.cfg.get('TxStart', '!') or '!')[0]
-            payload = f"{tx_start}HEX:ENDCRC{self.total_data_crc:04X};".encode('ascii')
+            # ENDCRC后跟2字节的原始CRC数据（大端序），而不是ASCII字符串
+            header = f"{tx_start}HEX:ENDCRC".encode('ascii')
+            crc_bytes = self.total_data_crc.to_bytes(2, byteorder='big')
+            payload = header + crc_bytes + b';'
             frame = self._build_frame(payload)
 
             self.ser.write(frame)
