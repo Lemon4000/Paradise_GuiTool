@@ -51,3 +51,28 @@ jobs:
             dist/UsartGUI_build_${{ env.BUILD_NUM }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Send Email Notification
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "新版本已发布: UsartGUI Build #${{ env.BUILD_NUM }}"
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          body: |
+            您好！
+
+            编程卡上位机新版本已自动构建完成：
+
+            ? 版本: Build #${{ env.BUILD_NUM }}
+            ? 下载地址: https://github.com/Lemon4000/CoderCard-FKKK/releases/tag/build-${{ env.BUILD_NUM }}
+            ? 构建时间: ${{ github.event.head_commit.timestamp }}
+            ? 提交信息: ${{ github.event.head_commit.message }}
+
+            请访问上述链接下载 UsartGUI_build_${{ env.BUILD_NUM }}.zip
+
+            此邮件由 GitHub Actions 自动发送。
