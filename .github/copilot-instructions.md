@@ -1,0 +1,21 @@
+# Copilot Instructions
+
+- Product: PySide6 desktop tool for ESC parameter config + firmware flashing. Two main tabs live in [gui/views/MainWindow.py](gui/views/MainWindow.py): params table + flash workflow, plus docked comm logs.
+- Entry: [gui/main.py](gui/main.py) sets CWD for frozen builds, loads [gui/resources/style.qss](gui/resources/style.qss), then shows `MainWindow`.
+- Protocol data: [config/Protocol.csv](config/Protocol.csv) drives serial preamble, checksum (`CRC16_MODBUS` or `SUM8`), baud, start chars (`TxStart`/`RxStart`). Param mapping comes from [config/A组.csv](config/A组.csv) or `config/params.xlsx` fallback (sheet names `A组`, `Protocol`).
+- Serial layer: [gui/services/SerialWorker.py](gui/services/SerialWorker.py) wraps `Usart_Para_FK` helpers. ThreadPool read loop auto-emits raw/ASCII/parsed signals, auto-replies with `!REPLY:` frames when not in passthrough. `setPassthroughMode(True)` is required for flashing to avoid auto parse/reply.
+- Frame helpers: [Usart_Para_FK.py](Usart_Para_FK.py) builds read/write frames, parses replies, opens ports via `pyserial`, and validates ranges before writes. Keys are sorted numerically and min/max enforced.
+- Param model: [gui/models/ParamTableModel.py](gui/models/ParamTableModel.py) loads mapping via `proto.load_mapping`, enforces Min/Max in `setData`, and formats values with per-key precision. `valuesDict()` emits numeric dict used by `SerialWorker.writeGroup`.
+- UI actions: Main toolbar hooks to serial worker; status light (red/yellow/green/blue) reflects link/reply state. HEX/ASCII log docks buffer colored HTML strings; `recvFormat`/`sendFormat` toggles rebuild views from buffers.
+- Baud mgmt: [gui/services/ConfigManager.py](gui/services/ConfigManager.py) persists `config/user_config.json` (default baud 2000000, last baud/HEX path, custom rates). [gui/views/BaudRateManagerDialog.py](gui/views/BaudRateManagerDialog.py) edits custom/default rates; `MainWindow` reloads list after dialog.
+- Flash tab: [gui/views/FlashTab.py](gui/views/FlashTab.py) manages HEX selection (drag/browse), progress, and log docks. Before flashing it enables serial passthrough, spins [gui/services/FlashWorker.py](gui/services/FlashWorker.py), and forwards raw frames from `MainWindow._onFrameRecv`.
+- Flash state machine (FlashWorker): states INIT→ERASE→PROGRAM (blocks of 2048 bytes)→VERIFY; retries with timers; debug mode allows manual stepping. Builds frames with binary payloads (DATA and ENDCRC use raw bytes, not ASCII). Accumulates each sent frame CRC (little-endian) into `total_data_crc`, then sends ENDCRC command; VERIFY expects `#HEX:REPLY[crc]`. Keep these rules when changing protocol.
+- Hex parsing: [hex_parser.py](hex_parser.py) (used by `FlashWorker` and utility scripts) computes `min_address`, `max_address`, data blocks. `scripts/calc_first_frame_crc.py` shows how to derive CRC for first block payload.
+- Logs: Flash tab renders both HEX dumps (`_hex_dump` with ASCII column + CRC hint) and ASCII previews; toggled by combobox. Status log tracks error details (CRC mismatch, data mismatch, format errors) with colored HTML.
+- Common run: `pip install -r requirements.txt`, then `python gui/main.py` (or `python -m gui.main`). Quick run script: `pwsh scripts/run.ps1`.
+- Build: `pwsh scripts/build.ps1 -Name UsartGUI -OneFile` uses PyInstaller, bundles `config` and serial hidden imports; non-onefile build copies `config` into `dist/UsartGUI/`.
+- Config files are user-editable; do not hardcode protocol/baud tables. When adding new groups/keys, update [config/A组.csv](config/A组.csv) or `params.xlsx`; model sorts keys by numeric suffix.
+- Serial worker auto-resets model on disconnect and refreshes port list every 2s; keep UI responsive by emitting signals rather than blocking loops.
+- Exit command: `_onExit` uses `SerialWorker.sendExit` building `!EXIT;` frame with checksum; respects protocol preamble/checksum.
+- Styling: keep new widgets using existing layout conventions and dark-ish theme; style sheet lives in [gui/resources/style.qss](gui/resources/style.qss).
+- Tests: no automated tests; prefer manual sanity via connecting to device, reading/writing A-group, and running a sample flash with a small HEX to confirm INIT/ERASE/PROGRAM/VERIFY transitions.

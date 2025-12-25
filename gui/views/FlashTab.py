@@ -6,8 +6,9 @@ from PySide6.QtCore import Qt, QMimeData
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QTextEdit, QFrame, QGroupBox, QMessageBox, QComboBox, QDockWidget, QMainWindow, QCheckBox
+    QProgressBar, QTextEdit, QFrame, QGroupBox, QMessageBox, QComboBox, QDockWidget, QMainWindow, QCheckBox, QSplitter
 )
+from PySide6.QtGui import QFontDatabase
 import os
 from gui.services.FlashWorker import FlashWorker, FlashState
 from hex_parser import HexParser
@@ -80,31 +81,69 @@ class FlashTab(QWidget):
         self.hex_file_path = None
         self.is_flashing = False
         self.debug_mode = False
+        # 日志配色（固定）
+        self.addr_color = "#F75BC6"  # 247,91,198
+        self.hex_color = "#41FF41"   # 65,255,65
+        self.ascii_color = "#FFB000" # 255,176,0
 
         self._init_ui()
 
     # ---------------- 日志格式化工具 ----------------
     @staticmethod
-    def _hex_dump(hex_str: str, width: int = 16) -> str:
-        """HEX字符串美观输出: 十六进制+ASCII，全量显示不截断。"""
+    def _hex_dump(hex_str: str, width: int = 16, base_address: int | None = None, return_parts: bool = False, html_color: bool = False, addr_color: str | None = None, hex_color: str | None = None, ascii_color: str | None = None):
+        """HEX字符串美观输出: 十六进制+ASCII，全量显示不截断。
+
+        base_address: 如果提供，地址列显示为绝对地址 (0xXXXXXXXX)，否则为偏移 0000.
+        return_parts: 为 True 时返回 (整体文本, 地址列, HEX列, ASCII列)。
+        html_color: 为 True 时返回HTML格式彩色文本。
+        """
         try:
             data = bytes.fromhex(hex_str)
         except Exception:
-            return "[格式错误]"
+            return ("[格式错误]", "", "", "") if return_parts else "[格式错误]"
 
         total = len(data)
         lines = []
+        addr_lines = []
+        hex_lines = []
+        ascii_lines = []
+        base = base_address if base_address is not None else 0
+        
+        # 颜色定义：地址、HEX、ASCII（可外部传入）
+        addr_color = addr_color or "#4A90E2"
+        hex_color = hex_color or "#50C878"
+        ascii_color = ascii_color or "#FF8C42"
+        
         for i in range(0, total, width):
             chunk = data[i:i + width]
             hex_part = ' '.join(f"{b:02X}" for b in chunk)
             ascii_part = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
-            lines.append(f"{i:04X}: {hex_part:<{width * 3 - 1}} |{ascii_part}|")
+            addr_val = base + i
+            addr_str = f"0x{addr_val:08X}" if base_address is not None else f"{i:04X}"
+            
+            if html_color:
+                line = f'<span style="color:{addr_color};">{addr_str}</span>: <span style="color:{hex_color};">{hex_part:<{width * 3 - 1}}</span> |<span style="color:{ascii_color};">{ascii_part}</span>|'
+                lines.append(line)
+            else:
+                lines.append(f"{addr_str}: {hex_part:<{width * 3 - 1}} |{ascii_part}|")
+            
+            addr_lines.append(addr_str)
+            hex_lines.append(hex_part)
+            ascii_lines.append(ascii_part)
 
-        lines.append(f"总长度 {total} 字节")
-        if total >= 2:
-            crc = data[-2:]
-            lines.append(f"CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}")
+        if html_color:
+            lines.append(f'<span style="color:#999;">总长度 {total} 字节</span>')
+            if total >= 2:
+                crc = data[-2:]
+                lines.append(f'<span style="color:#999;">CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}</span>')
+        else:
+            lines.append(f"总长度 {total} 字节")
+            if total >= 2:
+                crc = data[-2:]
+                lines.append(f"CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}")
 
+        if return_parts:
+            return '\n'.join(lines), '\n'.join(addr_lines), '\n'.join(hex_lines), '\n'.join(ascii_lines)
         return '\n'.join(lines)
 
     @staticmethod
@@ -118,58 +157,25 @@ class FlashTab(QWidget):
         return ''.join(chr(b) if 32 <= b < 127 else '.' for b in data)
 
     def _init_dock_logs(self, show_immediately: bool = False):
-        """在主窗口创建烧录日志Dock，默认已停靠，可拖拽/浮动。"""
-        if not self.main_window:
-            return
-        if self.dock_send:
-            if show_immediately:
-                self.dock_send.show(); self.dock_recv.show(); self.dock_status.show()
-            return
-
-        def make_dock(title: str, widget: QWidget, area=Qt.RightDockWidgetArea):
-            dock = QDockWidget(title, self.main_window)
-            dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-            dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-            dock.setWidget(widget)
-            self.main_window.addDockWidget(area, dock)
-            if show_immediately:
-                dock.show()
-            else:
-                dock.hide()
-            return dock
-
-        send_wrap = QWidget()
-        send_layout = QVBoxLayout(send_wrap)
-        send_layout.addWidget(self.send_log_view)
-
-        recv_wrap = QWidget()
-        recv_layout = QVBoxLayout(recv_wrap)
-        recv_layout.addWidget(self.recv_log_view)
-
-        status_wrap = QWidget()
-        status_layout = QVBoxLayout(status_wrap)
-        status_layout.addWidget(self.status_log_view)
-
-        self.dock_send = make_dock("烧录-发送数据", send_wrap, Qt.RightDockWidgetArea)
-        self.dock_recv = make_dock("烧录-接收数据", recv_wrap, Qt.RightDockWidgetArea)
-        self.dock_status = make_dock("烧录-状态信息", status_wrap, Qt.BottomDockWidgetArea)
-
-        # 初始布局：让发送和接收并排（右侧区域），状态在底部
-        self.main_window.tabifyDockWidget(self.dock_send, self.dock_recv)
-        self.dock_send.raise_()
+        """保留接口以兼容旧逻辑，但当前使用内嵌日志，不再创建Dock。"""
+        return
 
     def _init_ui(self):
         """初始化UI"""
         main_layout = QVBoxLayout(self)
 
-        # 文件选择区域
+        # 主区域左右分栏：左侧文件信息，右侧控制/进度
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(12)
+
+        # 文件选择区域（左）
         file_group = QGroupBox("HEX文件")
         file_layout = QVBoxLayout(file_group)
 
         self.drop_area = DropArea(self)
+        self.drop_area.setMinimumHeight(200)
         file_layout.addWidget(self.drop_area)
 
-        # 文件信息显示
         info_layout = QHBoxLayout()
         self.lbl_file_size = QLabel("文件大小: --")
         self.lbl_data_blocks = QLabel("数据块: --")
@@ -180,10 +186,14 @@ class FlashTab(QWidget):
         info_layout.addStretch()
         file_layout.addLayout(info_layout)
 
-        main_layout.addWidget(file_group)
+        # 右侧控制区域
+        right_wrap = QWidget()
+        right_layout = QVBoxLayout(right_wrap)
+        right_layout.setSpacing(10)
 
         # 控制按钮
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
         self.btn_browse = QPushButton("浏览...")
         self.btn_browse.clicked.connect(self.on_browse_clicked)
 
@@ -210,7 +220,7 @@ class FlashTab(QWidget):
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_abort)
         btn_layout.addWidget(self.btn_next_step)
-        main_layout.addLayout(btn_layout)
+        right_layout.addLayout(btn_layout)
 
         # 进度条
         progress_group = QGroupBox("烧录进度")
@@ -226,12 +236,12 @@ class FlashTab(QWidget):
         self.lbl_status.setAlignment(Qt.AlignCenter)
         progress_layout.addWidget(self.lbl_status)
 
-        main_layout.addWidget(progress_group)
+        right_layout.addWidget(progress_group)
 
         # 日志控件（统一用于 Dock）
         self.log_format = QComboBox()
-        self.log_format.addItems(['ASCII', 'HEX'])
-        self.log_format.setCurrentText('HEX')
+        self.log_format.addItems(['完整HEX', 'ASCII预览', '地址列', 'HEX列', 'ASCII列'])
+        self.log_format.setCurrentText('完整HEX')
         self.log_format.currentTextChanged.connect(self.on_log_format_changed)
 
         self.send_log_view = QTextEdit()
@@ -240,29 +250,107 @@ class FlashTab(QWidget):
         self.recv_log_view.setReadOnly(True)
         self.status_log_view = QTextEdit()
         self.status_log_view.setReadOnly(True)
+        self._apply_monospace(self.send_log_view)
+        self._apply_monospace(self.recv_log_view)
+        self._apply_monospace(self.status_log_view)
 
-        # 控制行（显示格式 + 清空）
         ctrl_layout = QHBoxLayout()
+        ctrl_layout.setSpacing(6)
         ctrl_layout.addWidget(QLabel("显示格式:"))
         ctrl_layout.addWidget(self.log_format)
         ctrl_layout.addStretch()
         btn_clear_log = QPushButton("清空日志")
         btn_clear_log.clicked.connect(self.clear_all_logs)
         ctrl_layout.addWidget(btn_clear_log)
-        main_layout.addLayout(ctrl_layout)
+        right_layout.addLayout(ctrl_layout)
 
-        # 创建并显示 Dock（默认停靠，支持拖拽/全屏浮动）
-        self.dock_send = None
-        self.dock_recv = None
-        self.dock_status = None
-        if self.main_window:
-            self._init_dock_logs(show_immediately=True)
+        # 固定配色，无调色板
+
+        right_layout.addStretch()
+
+        content_layout.addWidget(file_group, 5)
+        content_layout.addWidget(right_wrap, 2)
+        content_layout.setStretch(0, 5)
+        content_layout.setStretch(1, 2)
+        main_layout.addLayout(content_layout)
+
+        # 内嵌日志区域：顶部发送/接收横向分栏，底部状态信息可上下拖动
+        self.log_group = QGroupBox("烧录日志")
+        log_group_layout = QVBoxLayout(self.log_group)
+
+        top_split = QSplitter(Qt.Horizontal)
+        top_split.addWidget(self._wrap_log_panel("发送数据", self.send_log_view))
+        top_split.addWidget(self._wrap_log_panel("接收数据", self.recv_log_view))
+
+        main_split = QSplitter(Qt.Vertical)
+        main_split.addWidget(top_split)
+        main_split.addWidget(self._wrap_log_panel("状态信息", self.status_log_view))
+        main_split.setStretchFactor(0, 3)
+        main_split.setStretchFactor(1, 1)
+
+        log_group_layout.addWidget(main_split)
+        main_layout.addWidget(self.log_group, 3)
 
         # 缓存日志数据
         self.send_logs_ascii = []
         self.send_logs_hex = []
         self.recv_logs_ascii = []
         self.recv_logs_hex = []
+        self.send_raw_frames = []  # 仅存储HEX字符串原文
+        self.recv_raw_frames = []
+
+    def _wrap_log_panel(self, title: str, widget: QWidget) -> QWidget:
+        wrap = QGroupBox(title)
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.addWidget(widget)
+        return wrap
+
+    def _apply_monospace(self, widget: QTextEdit):
+        try:
+            mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+            widget.setFont(mono)
+        except Exception:
+            pass
+
+    def _get_colors(self):
+        return self.addr_color, self.hex_color, self.ascii_color
+
+    def _guess_base_address(self, hex_str: str) -> int | None:
+        """尝试从帧里解析 START 后的地址 (HEX:STARTXXXXXXXX)。失败则返回 None。"""
+        try:
+            data = bytes.fromhex(hex_str)
+            text = data.decode('latin1', errors='ignore')
+            key = "HEX:START"
+            idx = text.find(key)
+            if idx != -1 and len(text) >= idx + len(key) + 8:
+                addr_str = text[idx + len(key): idx + len(key) + 8]
+                if all(c in '0123456789ABCDEFabcdef' for c in addr_str):
+                    return int(addr_str, 16)
+        except Exception:
+            return None
+        return None
+
+    def _update_column_display(self, view: QTextEdit, raw_frames: list, column_type: str):
+        """显示特定列数据供用户直接选中复制，带颜色。"""
+        # 颜色定义
+        addr_color, hex_color, ascii_color = self._get_colors()
+        
+        lines = []
+        for hex_str in raw_frames:
+            base = self._guess_base_address(hex_str)
+            dump, addr_col, hex_col, ascii_col = self._hex_dump(hex_str, base_address=base, return_parts=True)
+            if column_type == '地址列':
+                colored = f'<span style="color:{addr_color};">{addr_col}</span>'
+                lines.append(colored)
+            elif column_type == 'HEX列':
+                colored = f'<span style="color:{hex_color};">{hex_col}</span>'
+                lines.append(colored)
+            elif column_type == 'ASCII列':
+                colored = f'<span style="color:{ascii_color};">{ascii_col}</span>'
+                lines.append(colored)
+        html = '<div style="white-space: pre; font-family: monospace;">' + '<br><br>'.join(lines) + '</div>'
+        view.setHtml(html)
 
     def on_browse_clicked(self):
         """浏览文件"""
@@ -425,9 +513,12 @@ class FlashTab(QWidget):
         except Exception:
             data_len = 0
 
-        # HEX格式（分行dump + CRC展示，自动截断）
-        dump = self._hex_dump(hex_str)
-        self.send_logs_hex.append(f"[{timestamp}] TX len={data_len}B\n{dump}")
+        # HEX格式（分行dump + CRC展示，带颜色）
+        base = self._guess_base_address(hex_str)
+        ac, hc, asc = self._get_colors()
+        dump = self._hex_dump(hex_str, base_address=base, html_color=True, addr_color=ac, hex_color=hc, ascii_color=asc)
+        self.send_logs_hex.append(f'<span style="color:#CCC;">[{timestamp}] TX len={data_len}B</span>\n{dump}')
+        self.send_raw_frames.append(hex_str)
 
         # ASCII预览（不可打印替换为.，仅预览）
         preview = self._ascii_preview(hex_str)
@@ -448,9 +539,12 @@ class FlashTab(QWidget):
         except Exception:
             data_len = 0
 
-        # HEX格式（分行dump + CRC展示，自动截断）
-        dump = self._hex_dump(hex_str)
-        self.recv_logs_hex.append(f"[{timestamp}] RX len={data_len}B\n{dump}")
+        # HEX格式（分行dump + CRC展示，带颜色）
+        base = self._guess_base_address(hex_str)
+        ac, hc, asc = self._get_colors()
+        dump = self._hex_dump(hex_str, base_address=base, html_color=True, addr_color=ac, hex_color=hc, ascii_color=asc)
+        self.recv_logs_hex.append(f'<span style="color:#CCC;">[{timestamp}] RX len={data_len}B</span>\n{dump}')
+        self.recv_raw_frames.append(hex_str)
 
         # ASCII预览（不可打印替换为.，仅预览）
         preview = self._ascii_preview(hex_str)
@@ -505,10 +599,17 @@ class FlashTab(QWidget):
 
     def _update_send_display(self):
         """更新发送日志显示"""
-        if self.log_format.currentText() == 'HEX':
-            self.send_log_view.setPlainText('\n'.join(self.send_logs_hex))
-        else:
+        fmt = self.log_format.currentText()
+        if fmt == '完整HEX':
+            html = '<div style="white-space: pre; font-family: monospace;">' + '<br>'.join(self.send_logs_hex) + '</div>'
+            self.send_log_view.setHtml(html)
+        elif fmt == 'ASCII预览':
             self.send_log_view.setPlainText('\n'.join(self.send_logs_ascii))
+        elif fmt in ('地址列', 'HEX列', 'ASCII列'):
+            self._update_column_display(self.send_log_view, self.send_raw_frames, fmt)
+        else:
+            html = '<div style="white-space: pre; font-family: monospace;">' + '<br>'.join(self.send_logs_hex) + '</div>'
+            self.send_log_view.setHtml(html)
 
         # 滚动到底部
         cursor = self.send_log_view.textCursor()
@@ -517,10 +618,17 @@ class FlashTab(QWidget):
 
     def _update_recv_display(self):
         """更新接收日志显示"""
-        if self.log_format.currentText() == 'HEX':
-            self.recv_log_view.setPlainText('\n'.join(self.recv_logs_hex))
-        else:
+        fmt = self.log_format.currentText()
+        if fmt == '完整HEX':
+            html = '<div style="white-space: pre; font-family: monospace;">' + '<br>'.join(self.recv_logs_hex) + '</div>'
+            self.recv_log_view.setHtml(html)
+        elif fmt == 'ASCII预览':
             self.recv_log_view.setPlainText('\n'.join(self.recv_logs_ascii))
+        elif fmt in ('地址列', 'HEX列', 'ASCII列'):
+            self._update_column_display(self.recv_log_view, self.recv_raw_frames, fmt)
+        else:
+            html = '<div style="white-space: pre; font-family: monospace;">' + '<br>'.join(self.recv_logs_hex) + '</div>'
+            self.recv_log_view.setHtml(html)
 
         # 滚动到底部
         cursor = self.recv_log_view.textCursor()
