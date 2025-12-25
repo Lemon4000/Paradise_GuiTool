@@ -44,19 +44,20 @@ class FlashWorker(QObject):
         self.data_blocks = []
         self.current_block_index = 0
         self.retry_count = 0
-        self.max_retries = 3  # 最大重试3次，避免卡顿
+        self.max_retries = 20  # 最大重试20次，避免卡顿
         self.last_sent_crc = None
         self.total_data_crc = 0  # 累计数据CRC
         self.cfg = None
         self.consecutive_errors = 0  # 连续错误计数
         self.max_consecutive_errors = 5  # 最大连续错误数
+        self.debug_mode = False  # 调试模式：手动推进、提示期望响应
 
         # 超时定时器
         self.timeout_timer = QTimer()
         self.timeout_timer.setSingleShot(True)
         self.timeout_timer.timeout.connect(self._on_timeout)
 
-    def start_flash(self, ser, hex_file_path: str):
+    def start_flash(self, ser, hex_file_path: str, debug_mode: bool = False):
         """开始烧录"""
         try:
             self.ser = ser
@@ -65,6 +66,7 @@ class FlashWorker(QObject):
             self.current_block_index = 0
             self.total_data_crc = 0
             self.consecutive_errors = 0
+            self.debug_mode = debug_mode
 
             # 读取配置
             self.cfg = proto._read_protocol_cfg()
@@ -97,6 +99,11 @@ class FlashWorker(QObject):
         try:
             # 发出接收信号
             self.sigFrameRecv.emit(frame.hex())
+
+            # 调试模式下只记录，不自动推进，等待手动“下一步”
+            if self.debug_mode:
+                self.sigLog.emit("调试模式：已收到数据，等待手动下一步")
+                return
 
             # 根据当前状态处理
             if self.state == FlashState.WAIT_INIT:
@@ -145,8 +152,12 @@ class FlashWorker(QObject):
             self.last_sent_crc = self._get_frame_crc(frame)
 
             self.state = FlashState.WAIT_INIT
-            self.timeout_timer.start(5000)  # 5秒超时
+            if not self.debug_mode:
+                self.timeout_timer.start(5000)  # 5秒超时
             self.sigProgress.emit(5, "等待初始化响应...")
+
+            # 调试模式提示期望响应
+            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX;")
 
         except Exception as e:
             self.sigLog.emit(f"发送初始化命令失败: {str(e)}")
@@ -208,8 +219,11 @@ class FlashWorker(QObject):
             self.last_sent_crc = self._get_frame_crc(frame)
 
             self.state = FlashState.WAIT_ERASE
-            self.timeout_timer.start(10000)  # 10秒超时
+            if not self.debug_mode:
+                self.timeout_timer.start(10000)  # 10秒超时
             self.sigProgress.emit(10, "等待擦除完成...")
+
+            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:ERASE;")
 
         except Exception as e:
             self.sigLog.emit(f"发送擦除命令失败: {str(e)}")
@@ -285,8 +299,15 @@ class FlashWorker(QObject):
             self.last_sent_crc = self._get_frame_crc(frame)
 
             self.state = FlashState.WAIT_PROGRAM
-            self.timeout_timer.start(2000)  # 2秒超时
+            if not self.debug_mode:
+                self.timeout_timer.start(2000)  # 2秒超时
             self.sigProgress.emit(progress, f"编程数据块 {self.current_block_index + 1}/{len(self.data_blocks)}...")
+
+            if self.last_sent_crc:
+                exp_crc = self.last_sent_crc.hex().upper()
+            else:
+                exp_crc = "(未知CRC)"
+            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{exp_crc}]")
 
         except Exception as e:
             self.sigLog.emit(f"发送编程数据失败: {str(e)}")
@@ -378,8 +399,11 @@ class FlashWorker(QObject):
             self.last_sent_crc = self._get_frame_crc(frame)
 
             self.state = FlashState.WAIT_VERIFY
-            self.timeout_timer.start(2000)  # 2秒超时
+            if not self.debug_mode:
+                self.timeout_timer.start(2000)  # 2秒超时
             self.sigProgress.emit(95, "等待校验结果...")
+
+            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX;REPLY{self.total_data_crc:04X}")
 
         except Exception as e:
             self.sigLog.emit(f"发送校验命令失败: {str(e)}")
@@ -448,6 +472,42 @@ class FlashWorker(QObject):
         cs = proto._checksum_bytes(payload, algo)
         return pre_bytes + payload + cs
 
+    def _emit_expected(self, expected_text: str):
+        """调试模式下提示期望响应内容"""
+        if self.debug_mode:
+            self.sigLog.emit(f"调试模式提示：期望收到 {expected_text}")
+
+    def step_next(self):
+        """调试模式下手动进入下一步"""
+        if not self.debug_mode:
+            self.sigLog.emit("当前非调试模式，无需手动下一步")
+            return
+
+        # 根据当前等待状态手动跳过
+        if self.state == FlashState.WAIT_INIT:
+            self.sigLog.emit("调试模式：跳过初始化响应，进入擦除")
+            self.timeout_timer.stop()
+            self.consecutive_errors = 0
+            self._transition_to(FlashState.ERASE)
+        elif self.state == FlashState.WAIT_ERASE:
+            self.sigLog.emit("调试模式：跳过擦除响应，进入编程")
+            self.timeout_timer.stop()
+            self.consecutive_errors = 0
+            self._transition_to(FlashState.PROGRAM)
+        elif self.state == FlashState.WAIT_PROGRAM:
+            self.sigLog.emit(f"调试模式：数据块 {self.current_block_index + 1} 直接视为成功，进入下一块")
+            self.timeout_timer.stop()
+            self.consecutive_errors = 0
+            self.current_block_index += 1
+            self._transition_to(FlashState.PROGRAM)
+        elif self.state == FlashState.WAIT_VERIFY:
+            self.sigLog.emit("调试模式：跳过校验响应，视为成功")
+            self.timeout_timer.stop()
+            self.consecutive_errors = 0
+            self._transition_to(FlashState.SUCCESS)
+        else:
+            self.sigLog.emit(f"当前状态 {self.state.name} 无需手动下一步或已完成")
+
     def _get_frame_crc(self, frame: bytes) -> bytes:
         """获取帧的CRC部分"""
         algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
@@ -493,7 +553,7 @@ class FlashWorker(QObject):
         if self.retry_count < self.max_retries:
             self.sigLog.emit(f"重试 ({self.retry_count}/{self.max_retries})...")
             # 增加重试延迟，避免频繁发送
-            QTimer.singleShot(500, self._do_retry)  # 延迟500ms后重试
+            QTimer.singleShot(200, self._do_retry)  # 延迟200ms后重试
         else:
             self.sigLog.emit("重试次数超限")
             self._transition_to(FlashState.FAILED)

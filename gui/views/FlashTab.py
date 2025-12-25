@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QMimeData
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QTextEdit, QFrame, QGroupBox, QMessageBox, QComboBox, QDockWidget, QMainWindow
+    QProgressBar, QTextEdit, QFrame, QGroupBox, QMessageBox, QComboBox, QDockWidget, QMainWindow, QCheckBox
 )
 import os
 from gui.services.FlashWorker import FlashWorker, FlashState
@@ -78,6 +78,7 @@ class FlashTab(QWidget):
         self.flash_worker = None
         self.hex_file_path = None
         self.is_flashing = False
+        self.debug_mode = False
 
         self._init_ui()
 
@@ -185,6 +186,9 @@ class FlashTab(QWidget):
         self.btn_browse = QPushButton("浏览...")
         self.btn_browse.clicked.connect(self.on_browse_clicked)
 
+        self.chk_debug = QCheckBox("调试模式(手动下一步)")
+        self.chk_debug.setToolTip("启用后发送指令后无需等待回应，点击‘下一步’手动推进流程，日志会提示期望回应。")
+
         self.btn_start = QPushButton("开始烧录")
         self.btn_start.setEnabled(False)
         self.btn_start.clicked.connect(self.on_start_clicked)
@@ -194,10 +198,17 @@ class FlashTab(QWidget):
         self.btn_abort.setEnabled(False)
         self.btn_abort.clicked.connect(self.on_abort_clicked)
 
+        self.btn_next_step = QPushButton("下一步")
+        self.btn_next_step.setEnabled(False)
+        self.btn_next_step.setToolTip("调试模式下，手动进入下一步")
+        self.btn_next_step.clicked.connect(self.on_next_step_clicked)
+
         btn_layout.addWidget(self.btn_browse)
+        btn_layout.addWidget(self.chk_debug)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_abort)
+        btn_layout.addWidget(self.btn_next_step)
         main_layout.addLayout(btn_layout)
 
         # 进度条
@@ -318,8 +329,10 @@ class FlashTab(QWidget):
 
         # 开始烧录
         self.is_flashing = True
+        self.debug_mode = self.chk_debug.isChecked()
         self.btn_start.setEnabled(False)
         self.btn_abort.setEnabled(True)
+        self.btn_next_step.setEnabled(self.debug_mode)
         self.btn_browse.setEnabled(False)
         self.progress_bar.setValue(0)
         self.clear_all_logs()
@@ -339,12 +352,13 @@ class FlashTab(QWidget):
         self.flash_worker.sigVerifyOk.connect(self.on_verify_ok)
 
         # 启动烧录
-        self.flash_worker.start_flash(self.serial_port, self.hex_file_path)
+        self.flash_worker.start_flash(self.serial_port, self.hex_file_path, debug_mode=self.debug_mode)
 
     def on_abort_clicked(self):
         """中止烧录"""
         if self.flash_worker:
             self.flash_worker.abort()
+        self.btn_next_step.setEnabled(False)
 
     def on_progress(self, percent: int, message: str):
         """进度更新"""
@@ -354,9 +368,11 @@ class FlashTab(QWidget):
     def on_completed(self, success: bool, message: str):
         """烧录完成"""
         self.is_flashing = False
+        self.debug_mode = False
         self.btn_start.setEnabled(True)
         self.btn_abort.setEnabled(False)
         self.btn_browse.setEnabled(True)
+        self.btn_next_step.setEnabled(False)
 
         # 禁用透传模式
         if self.serial_worker:
@@ -450,6 +466,13 @@ class FlashTab(QWidget):
         msg += f'  期望: <span style="color: green;">{expected}</span><br>'
         msg += f'  实际: <span style="color: green;">{received}</span>'
         self.status_log_view.append(msg)
+
+    def on_next_step_clicked(self):
+        """调试模式：手动下一步"""
+        if self.flash_worker:
+            self.flash_worker.step_next()
+        else:
+            self.status_log_view.append("[WARN] 尚未开始烧录，无法下一步")
 
     def on_log_format_changed(self, format_text: str):
         """日志格式切换"""
