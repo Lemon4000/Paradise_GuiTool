@@ -49,7 +49,9 @@ class FlashWorker(QObject):
         self.total_data_crc = 0  # 累计数据CRC
         self.cfg = None
         self.consecutive_errors = 0  # 连续错误计数
-        self.max_consecutive_errors = 5  # 最大连续错误数
+        self.max_consecutive_errors = 15  # 最大连续错误数
+        self.verify_retries = 0  # VERIFY阶段单独计数
+        self.max_verify_retries = 30  # VERIFY阶段允许更多重试
         self.debug_mode = False  # 调试模式：手动推进、提示期望响应
 
         # 超时定时器
@@ -66,6 +68,7 @@ class FlashWorker(QObject):
             self.current_block_index = 0
             self.total_data_crc = 0
             self.consecutive_errors = 0
+            self.verify_retries = 0
             self.debug_mode = debug_mode
 
             # 读取配置
@@ -470,6 +473,7 @@ class FlashWorker(QObject):
             self.sigVerifyOk.emit(expected_crc, reply_crc_str)
             self.timeout_timer.stop()
             self.consecutive_errors = 0  # 重置连续错误计数
+            self.verify_retries = 0  # 重置VERIFY重试计数
             self._transition_to(FlashState.SUCCESS)
 
         except Exception as e:
@@ -553,21 +557,30 @@ class FlashWorker(QObject):
 
     def _retry_or_fail(self, timeout_ms: int):
         """重试或失败"""
-        self.retry_count += 1
-        self.consecutive_errors += 1
-        
-        # 检查连续错误是否过多
-        if self.consecutive_errors >= self.max_consecutive_errors:
-            self.sigLog.emit(f"连续错误{self.consecutive_errors}次，停止烧录")
-            self._transition_to(FlashState.FAILED)
-            return
-            
-        if self.retry_count < self.max_retries:
-            self.sigLog.emit(f"重试 ({self.retry_count}/{self.max_retries})...")
-            # 增加重试延迟，避免频繁发送
-            QTimer.singleShot(200, self._do_retry)  # 延迟200ms后重试
+        # VERIFY阶段使用独立的重试计数
+        if self.state == FlashState.WAIT_VERIFY:
+            self.verify_retries += 1
+            max_retries = self.max_verify_retries
+            current_retries = self.verify_retries
+            retry_delay = 500  # VERIFY阶段延迟500ms
         else:
-            self.sigLog.emit("重试次数超限")
+            self.retry_count += 1
+            self.consecutive_errors += 1
+            max_retries = self.max_retries
+            current_retries = self.retry_count
+            retry_delay = 200  # 其他阶段延迟200ms
+            
+            # 检查连续错误是否过多（仅非VERIFY阶段）
+            if self.consecutive_errors >= self.max_consecutive_errors:
+                self.sigLog.emit(f"连续错误{self.consecutive_errors}次，停止烧录")
+                self._transition_to(FlashState.FAILED)
+                return
+            
+        if current_retries < max_retries:
+            self.sigLog.emit(f"重试 ({current_retries}/{max_retries})，延迟{retry_delay}ms...")
+            QTimer.singleShot(retry_delay, self._do_retry)
+        else:
+            self.sigLog.emit(f"重试次数超限 ({current_retries}/{max_retries})")
             self._transition_to(FlashState.FAILED)
     
     def _do_retry(self):
@@ -579,6 +592,8 @@ class FlashWorker(QObject):
             self._send_erase_command()
         elif self.state == FlashState.WAIT_PROGRAM:
             self._send_program_data()
+        elif self.state == FlashState.WAIT_VERIFY:
+            self._send_verify_command()
 
     def _on_timeout(self):
         """超时处理"""

@@ -121,7 +121,6 @@ jobs:
             - 配置记忆功能
             - 串口自动检测
 
-            附件中包含完整的安装包，也可访问上述链接在线下载。
+            请访问上述链接下载最新版本。
 
             此邮件由 GitHub Actions 自动发送。
-          attachments: dist/${{ env.ZIP_NAME }}
