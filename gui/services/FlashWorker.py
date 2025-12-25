@@ -403,14 +403,14 @@ class FlashWorker(QObject):
                 self.timeout_timer.start(2000)  # 2秒超时
             self.sigProgress.emit(95, "等待校验结果...")
 
-            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX;REPLY{self.total_data_crc:04X}")
+            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{self.total_data_crc:04X}]")
 
         except Exception as e:
             self.sigLog.emit(f"发送校验命令失败: {str(e)}")
             self._transition_to(FlashState.FAILED)
 
     def _handle_verify_response(self, frame: bytes):
-        """处理校验响应: #HEX;REPLY[总CRC];[CRC]"""
+        """处理校验响应: #HEX:REPLY[总CRC];[CRC]"""
         try:
             # 提取实际接收的CRC
             recv_crc = self._get_frame_crc(frame)
@@ -433,16 +433,25 @@ class FlashWorker(QObject):
 
             # 检查是否是REPLY响应
             payload_str = payload.decode('ascii', errors='ignore')
-            expected_prefix = f"{rx_start}HEX;REPLY"
+            expected_prefix = f"{rx_start}HEX:REPLY"
 
             if not payload_str.startswith(expected_prefix):
                 self.sigLog.emit(f"校验响应格式错误")
-                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}...", payload_str)
+                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str)
                 self._transition_to(FlashState.FAILED)
                 return
 
-            # 提取回复的CRC
-            reply_crc_str = payload_str[len(expected_prefix):-1]  # 去掉末尾的;
+            # 提取回复的CRC (REPLY后到;之前的内容)
+            prefix_len = len(expected_prefix)
+            semicolon_pos = payload_str.find(';')
+            
+            if semicolon_pos == -1:
+                self.sigLog.emit(f"校验响应格式错误: 缺少分号")
+                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str)
+                self._transition_to(FlashState.FAILED)
+                return
+            
+            reply_crc_str = payload_str[prefix_len:semicolon_pos]  # 提取[hex]部分
 
             # 验证回复的总CRC
             expected_crc = f"{self.total_data_crc:04X}"
