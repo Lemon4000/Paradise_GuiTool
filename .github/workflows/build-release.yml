@@ -43,12 +43,15 @@ jobs:
             $version = "1.0.0"
           }
           
+          # Append build number to version for auto-increment
+          $fullVersion = "${version}.${env:BUILD_NUM}"
+          
           # Get commit message (first line)
           $commitMsg = "${{ github.event.head_commit.message }}" -split "`n" | Select-Object -First 1
           $commitMsg = $commitMsg -replace '[<>:"/\\|?*]', '_'  # Remove invalid filename chars
           $commitMsg = $commitMsg.Substring(0, [Math]::Min(50, $commitMsg.Length))  # Limit length
           
-          $zipName = "Paradise_GuiToolV${version}-${commitMsg}.zip"
+          $zipName = "Paradise_GuiToolV${fullVersion}-${commitMsg}.zip"
           $zipPath = "dist/$zipName"
           
           # Package exe and config
@@ -57,17 +60,18 @@ jobs:
           
           # Save for next step
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
-          echo "VERSION=$version" >> $env:GITHUB_ENV
+          echo "VERSION=$fullVersion" >> $env:GITHUB_ENV
+          echo "BASE_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}-build${{ env.BUILD_NUM }}
-          name: "Paradise GuiTool V${{ env.VERSION }} - ${{ github.event.head_commit.message }}"
+          tag_name: v${{ env.VERSION }}
+          name: "Paradise GuiTool V${{ env.BASE_VERSION }} Build #${{ env.BUILD_NUM }}"
           draft: false
           prerelease: false
           body: |
-            ## Paradise GuiTool V${{ env.VERSION }}
+            ## Paradise GuiTool V${{ env.BASE_VERSION }} (Build #${{ env.BUILD_NUM }})
             
             ### ? 功能特性
             - ? 电调参数读写配置
@@ -81,6 +85,8 @@ jobs:
             ${{ github.event.head_commit.message }}
             
             ### ? 构建信息
+            - 完整版本: ${{ env.VERSION }}
+            - 基础版本: ${{ env.BASE_VERSION }}
             - 构建号: #${{ env.BUILD_NUM }}
             - 提交: ${{ github.sha }}
             - 构建时间: ${{ github.event.head_commit.timestamp }}
@@ -108,9 +114,10 @@ jobs:
 
             Paradise GuiTool 新版本已自动构建完成：
 
-            ? 版本: V${{ env.VERSION }}
+            ? 完整版本: V${{ env.VERSION }}
+            ? 基础版本: V${{ env.BASE_VERSION }}
             ? 构建号: #${{ env.BUILD_NUM }}
-            ? 下载地址: https://github.com/${{ github.repository }}/releases/tag/v${{ env.VERSION }}-build${{ env.BUILD_NUM }}
+            ? 下载地址: https://github.com/${{ github.repository }}/releases/tag/v${{ env.VERSION }}
             ? 构建时间: ${{ github.event.head_commit.timestamp }}
             ? 提交信息: ${{ github.event.head_commit.message }}
 

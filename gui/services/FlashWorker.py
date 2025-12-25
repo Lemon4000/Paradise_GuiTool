@@ -283,9 +283,8 @@ class FlashWorker(QObject):
 
             # 获取当前数据块
             address, data = self.data_blocks[self.current_block_index]
-            # 计算数据块的CRC并累加到总CRC
-            data_crc = proto._crc16_modbus(data)
-            self.total_data_crc = (self.total_data_crc + data_crc) & 0xFFFF
+            # 注意：不要在发送阶段累加数据块CRC，避免重试导致重复累加
+            # 改为在收到该块成功回复后再累加（见 _handle_program_response）
 
             progress = int((self.current_block_index / len(self.data_blocks)) * 80) + 10
             self.sigLog.emit(f"发送数据块 {self.current_block_index + 1}/{len(self.data_blocks)} " +
@@ -377,6 +376,15 @@ class FlashWorker(QObject):
             self.sigLog.emit(f"数据块 {self.current_block_index + 1} 编程成功")
             if self.last_sent_crc:
                 self.sigVerifyOk.emit(self.last_sent_crc.hex().upper(), reply_crc_bytes.hex().upper())
+
+            # 在收到成功回复后，累加该数据块的CRC到总CRC（避免重试重复累加）
+            try:
+                _, data = self.data_blocks[self.current_block_index]
+                data_crc = proto._crc16_modbus(data)
+                self.total_data_crc = (self.total_data_crc + data_crc) & 0xFFFF
+                self.sigLog.emit(f"累计总数据CRC: 0x{self.total_data_crc:04X}")
+            except Exception:
+                pass
 
             self.timeout_timer.stop()
             self.consecutive_errors = 0  # 重置连续错误计数
@@ -514,6 +522,16 @@ class FlashWorker(QObject):
             self.sigLog.emit(f"调试模式：数据块 {self.current_block_index + 1} 直接视为成功，进入下一块")
             self.timeout_timer.stop()
             self.consecutive_errors = 0
+            
+            # 调试模式跳过时，也要累加当前块的数据CRC（模拟成功场景）
+            try:
+                _, data = self.data_blocks[self.current_block_index]
+                data_crc = proto._crc16_modbus(data)
+                self.total_data_crc = (self.total_data_crc + data_crc) & 0xFFFF
+                self.sigLog.emit(f"累计总数据CRC: 0x{self.total_data_crc:04X}")
+            except Exception:
+                pass
+            
             self.current_block_index += 1
             self._transition_to(FlashState.PROGRAM)
         elif self.state == FlashState.WAIT_VERIFY:
