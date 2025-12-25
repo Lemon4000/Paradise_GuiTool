@@ -53,6 +53,8 @@ class FlashWorker(QObject):
         self.verify_retries = 0  # VERIFY阶段单独计数
         self.max_verify_retries = 30  # VERIFY阶段允许更多重试
         self.debug_mode = False  # 调试模式：手动推进、提示期望响应
+        self.crc_accumulate_count = 0  # CRC累加次数计数器
+        self.accumulated_crc_list = []  # 存储每块参与累加的CRC值
 
         # 超时定时器
         self.timeout_timer = QTimer()
@@ -70,6 +72,8 @@ class FlashWorker(QObject):
             self.consecutive_errors = 0
             self.verify_retries = 0
             self.debug_mode = debug_mode
+            self.crc_accumulate_count = 0  # 重置累加计数器
+            self.accumulated_crc_list = []  # 重置CRC值列表
 
             # 读取配置
             self.cfg = proto._read_protocol_cfg()
@@ -377,12 +381,15 @@ class FlashWorker(QObject):
             if self.last_sent_crc:
                 self.sigVerifyOk.emit(self.last_sent_crc.hex().upper(), reply_crc_bytes.hex().upper())
 
-            # 在收到成功回复后，累加该数据块的CRC到总CRC（避免重试重复累加）
+            # 在收到成功回复后，累加该数据帧的帧CRC到总CRC（避免重试重复累加）
+            # 帧CRC = last_sent_crc（已在发送时计算）
             try:
-                _, data = self.data_blocks[self.current_block_index]
-                data_crc = proto._crc16_modbus(data)
-                self.total_data_crc = (self.total_data_crc + data_crc) & 0xFFFF
-                self.sigLog.emit(f"累计总数据CRC: 0x{self.total_data_crc:04X}")
+                if self.last_sent_crc:
+                    frame_crc = int.from_bytes(self.last_sent_crc, byteorder='little')  # 小端转整数
+                    self.total_data_crc = (self.total_data_crc + frame_crc) & 0xFFFF
+                    self.crc_accumulate_count += 1
+                    self.accumulated_crc_list.append(frame_crc)  # 保存帧CRC
+                    self.sigLog.emit(f"[累加{self.crc_accumulate_count}次] 块{self.current_block_index + 1} 帧CRC=0x{frame_crc:04X}, 累计总CRC=0x{self.total_data_crc:04X}")
             except Exception:
                 pass
 
@@ -400,6 +407,19 @@ class FlashWorker(QObject):
     def _send_verify_command(self):
         """发送校验命令: !HEX:ENDCRC[total_crc];[CRC]"""
         try:
+            # 输出所有参与累加的帧CRC值
+            self.sigLog.emit(f"=" * 60)
+            self.sigLog.emit(f"参与累加的帧CRC列表 (共{len(self.accumulated_crc_list)}个):")
+            self.sigLog.emit(f"说明: 每个值是对应数据帧的帧CRC（小端格式整数），ENDCRC = 所有帧CRC直接相加")
+            crc_str_list = []
+            for i, crc in enumerate(self.accumulated_crc_list):
+                crc_str_list.append(f"0x{crc:04X}")
+                if (i + 1) % 8 == 0:
+                    self.sigLog.emit(f"  {', '.join(crc_str_list)}")
+                    crc_str_list = []
+            if crc_str_list:  # 输出剩余的
+                self.sigLog.emit(f"  {', '.join(crc_str_list)}")
+            self.sigLog.emit(f"=" * 60)
             self.sigLog.emit(f"发送校验命令 (总CRC:0x{self.total_data_crc:04X})...")
             tx_start = (self.cfg.get('TxStart', '!') or '!')[0]
             # ENDCRC后跟2字节的原始CRC数据（大端序），而不是ASCII字符串
@@ -523,12 +543,14 @@ class FlashWorker(QObject):
             self.timeout_timer.stop()
             self.consecutive_errors = 0
             
-            # 调试模式跳过时，也要累加当前块的数据CRC（模拟成功场景）
+            # 调试模式跳过时，也要累加当前帧的帧CRC（模拟成功场景）
             try:
-                _, data = self.data_blocks[self.current_block_index]
-                data_crc = proto._crc16_modbus(data)
-                self.total_data_crc = (self.total_data_crc + data_crc) & 0xFFFF
-                self.sigLog.emit(f"累计总数据CRC: 0x{self.total_data_crc:04X}")
+                if self.last_sent_crc:
+                    frame_crc = int.from_bytes(self.last_sent_crc, byteorder='little')  # 小端转整数
+                    self.total_data_crc = (self.total_data_crc + frame_crc) & 0xFFFF
+                    self.crc_accumulate_count += 1
+                    self.accumulated_crc_list.append(frame_crc)  # 保存帧CRC
+                    self.sigLog.emit(f"[累加{self.crc_accumulate_count}次] 块{self.current_block_index + 1} 帧CRC=0x{frame_crc:04X}, 累计总CRC=0x{self.total_data_crc:04X}")
             except Exception:
                 pass
             
