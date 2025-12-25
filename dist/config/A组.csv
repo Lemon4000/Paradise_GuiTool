@@ -1,21 +1,21 @@
 ﻿Key,Name                      ,Unit,Min,Max   ,Precision,Default,Description  
-A0 ,Motor_Np                  ,V   ,1,50,2,14,电机极对数       The motor pole is logarithmic
-A1 ,Rs_mO                     ,rpm ,0,500,2,60,电机相电阻        Motor phase resistance
-A2 ,Lq_uH                     ,A   ,0,500,2,45,电机相电感        Motor phase inductor 
-A3 ,Flux                      ,FI  ,0,2000,2,665,电机磁链         Motor magnetic chain
-A4 ,Motor_PeakTorqueEle       ,0.A ,0,5000,2,1000,电机最大电动电流     Motor maximum electric current
-A5 ,Motor_PeakTorqueGen       ,0.A ,0,2000,2,300,电机最大发电电流     The maximum generation current of the motor  
-A6 ,GammaMax                  ,无   ,0,100,2,5,锁相环Gama      Locked in a Gama
-A7 ,FluxPll_omega             ,无   ,0,10000,2,2500,磁链锁相环omega   Magnetic chain phase-locked ring omega
-A8 ,FluxPll_xi                ,无   ,0,10000,2,50,锁相环I         Phase-locked loop I
-A9 ,Id_kp                     ,无   ,0,50,2,25,交叉解耦d轴Kp     Cross-decoupling d-axis Kp
-A10,Iq_kp                     ,无   ,0,50,2,25,交叉解耦q轴Kp     Cross-decoupling Q-axis Kp
-A11,Id_ki                     ,无   ,0,50,2,2,交叉解耦d轴Ki     Cross-decoupling d-axis Ki
-A12,Iq_ki                     ,无   ,0,50,2,2,交叉解耦q轴Ki     Cross-decoupling Q-axis Ki
-A13,LADRC_b0                  ,无   ,0,100000,2,200,速度环ADRC_b0增益值     Speed ring ADRC_b0 buff
-A14,LADRC_Omega_c_Start       ,无   ,0,100000,2,10,速度环启动c      Speed ring starts c
-A15,ratedspeed                ,rpm ,0,100000,2,2400,额定速度         Rated speed
-A16,maxspeed                  ,rpm ,0,100000,2,4450,最大速度         Maximum speed
-A17,ratedpwm                  ,uS  ,0,100000,2,1500,额定PWM脉宽      Rated PWM pulse width
-A18,Motor_Protect_AlarmTempCtr,无   ,0,100000,2,100,报警温度值        alarm temperature value
-A19,Motor_Protect_OverTempCtr ,无   ,0,100000,2,115,保护温度值        Protect the temperature value
+A0 ,Motor_Np                  ,V   ,1,50,2,14,电机极对数        
+A1 ,Rs_mO                     ,rpm ,0,500,2,60,电机相电阻        
+A2 ,Lq_uH                     ,A   ,0,500,2,45,电机相电感        
+A3 ,Flux                      ,FI  ,0,2000,2,665,电机磁链         
+A4 ,Motor_PeakTorqueEle       ,0.A ,0,5000,2,1000,电机最大电动电流     
+A5 ,Motor_PeakTorqueGen       ,0.A ,0,2000,2,300,电机最大发电电流     
+A6 ,GammaMax                  ,无   ,0,100,2,5,锁相环Gama      
+A7 ,FluxPll_omega             ,无   ,0,10000,2,2500,磁链锁相环omega   
+A8 ,FluxPll_xi                ,无   ,0,10000,2,50,锁相环I         
+A9 ,Id_kp                     ,无   ,0,50,2,25,交叉解耦d轴Kp     
+A10,Iq_kp                     ,无   ,0,50,2,25,交叉解耦q轴Kp     
+A11,Id_ki                     ,无   ,0,50,2,2,交叉解耦d轴Ki     
+A12,Iq_ki                     ,无   ,0,50,2,2,交叉解耦q轴Ki     
+A13,LADRC_b0                  ,无   ,0,100000,2,200,速度环ADRC_b0增益值
+A14,LADRC_Omega_c_Start       ,无   ,0,100000,2,10,速度环启动c      
+A15,ratedspeed                ,rpm ,0,100000,2,2400,额定速度         
+A16,maxspeed                  ,rpm ,0,100000,2,4450,最大速度         
+A17,ratedpwm                  ,uS  ,0,100000,2,1500,额定PWM脉宽      
+A18,Motor_Protect_AlarmTempCtr,无   ,0,100000,2,100,报警温度值        
+A19,Motor_Protect_OverTempCtr ,无   ,0,100000,2,115,保护温度值        

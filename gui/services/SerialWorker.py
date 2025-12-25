@@ -26,6 +26,7 @@ class SerialWorker(QObject):
         self.ser = None
         self._reading = False
         self._last_tx_crc = None
+        self._passthrough_mode = False  # 透传模式，用于固件烧录
 
     def shutdown(self):
         try:
@@ -96,6 +97,10 @@ class SerialWorker(QObject):
 
     def setBaudRate(self, baud: int):
         self.current_cfg['Baud'] = str(baud)
+
+    def setPassthroughMode(self, enabled: bool):
+        """设置透传模式（固件烧录时使用）"""
+        self._passthrough_mode = enabled
 
     def sendExit(self):
         if not self.port:
@@ -188,16 +193,20 @@ class SerialWorker(QObject):
                                     self.sigAsciiRecv.emit(cs.decode('latin1'))
                                 except Exception:
                                     pass
-                            
+
                             # Frame complete, emit Break
                             self.sigRecvBreak.emit()
-                            
+
                             frame = (pre if pre_len and recent == pre else b'') + bytes(payload) + cs
                             try:
                                 self.sigFrameRecv.emit(frame.hex())
                             except Exception:
                                 pass
-                            
+
+                            # 在透传模式下，跳过自动处理和回复
+                            if self._passthrough_mode:
+                                break
+
                             # self.sigAsciiRecv already emitted stream
                             pl = bytes(payload)
                             is_reply = pl.startswith(b'#REPLY:') and pl.endswith(b';')

@@ -1,17 +1,19 @@
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton,
-    QTableView, QStatusBar, QToolBar, QFileDialog, QDockWidget, QPlainTextEdit, QTextEdit, QLabel, QMessageBox
+    QTableView, QStatusBar, QToolBar, QFileDialog, QDockWidget, QPlainTextEdit, QTextEdit, QLabel, QMessageBox, QTabWidget
 )
 try:
     from gui.models.ParamTableModel import ParamTableModel
     from gui.services.SerialWorker import SerialWorker
+    from gui.views.FlashTab import FlashTab
 except Exception:
     import sys, os
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
     from gui.models.ParamTableModel import ParamTableModel
     from gui.services.SerialWorker import SerialWorker
+    from gui.views.FlashTab import FlashTab
 import Usart_Para_FK as proto
 
 class MainWindow(QMainWindow):
@@ -21,6 +23,12 @@ class MainWindow(QMainWindow):
         self.resize(1000, 680)
 
         self.portBox = QComboBox()
+        self.portBox.setMinimumWidth(250)  # 增加宽度以显示详细信息
+        self.port_device_map = {}  # 存储显示名称到设备名称的映射
+        self.btnRefreshPort = QPushButton('🔄')  # 刷新串口按钮
+        self.btnRefreshPort.setMaximumWidth(30)
+        self.btnRefreshPort.setToolTip('刷新串口列表')
+        
         self.groupBox = QComboBox()
         self.groupBox.addItems(['A'])
         self.baudBox = QComboBox()
@@ -43,6 +51,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addWidget(QLabel('串口:'))
         tb.addWidget(self.portBox)
+        tb.addWidget(self.btnRefreshPort)
         tb.addWidget(QLabel('组:'))
         tb.addWidget(self.groupBox)
         tb.addWidget(QLabel('波特率:'))
@@ -66,9 +75,22 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(True)
 
+        # 参数表格标签页
+        param_tab = QWidget()
+        param_layout = QVBoxLayout(param_tab)
+        param_layout.addWidget(self.table)
+
+        # 固件烧录标签页（传入主窗口以启用可浮动日志）
+        self.flash_tab = FlashTab(self)
+
+        # 创建标签控件
+        self.tab_widget = QTabWidget()
+        self.tab_widget.addTab(param_tab, "参数配置")
+        self.tab_widget.addTab(self.flash_tab, "固件烧录")
+
         central = QWidget()
         lay = QVBoxLayout(central)
-        lay.addWidget(self.table)
+        lay.addWidget(self.tab_widget)
         self.setCentralWidget(central)
 
         self.logDock = QDockWidget('通信日志', self)
@@ -125,6 +147,12 @@ class MainWindow(QMainWindow):
         self.sendAsciiBuf = []
         self.recvToggle = False
         self.sendToggle = False
+        
+        # 串口自动刷新定时器
+        self.port_refresh_timer = QTimer()
+        self.port_refresh_timer.timeout.connect(self._refreshPorts)
+        self.port_refresh_timer.start(2000)  # 每2秒刷新一次
+        
         self._bindSignals()
         self._refreshPorts()
         self._updateButtons(False)
@@ -144,6 +172,7 @@ class MainWindow(QMainWindow):
         self.btnExit.clicked.connect(self._onExit)
         self.btnImport.clicked.connect(self._onImport)
         self.btnRefresh.clicked.connect(self._onRefresh)
+        self.btnRefreshPort.clicked.connect(self._onRefreshPortClicked)
 
         self.worker.sigConnected.connect(self._onConnected)
         self.worker.sigFrameSent.connect(self._onFrameSent)
@@ -164,13 +193,49 @@ class MainWindow(QMainWindow):
         self.baudBox.currentTextChanged.connect(self._onBaudChange)
 
     def _refreshPorts(self):
+        """刷新串口列表，保持当前选择"""
         try:
             import serial.tools.list_ports as lp
+            
+            # 保存当前选择的设备名称
+            current_text = self.portBox.currentText()
+            current_device = self.port_device_map.get(current_text, '')
+            
+            # 获取所有串口
+            ports = list(lp.comports())
+            
+            # 构建新的端口列表和映射
+            new_items = []
+            new_map = {}
+            
+            for port in ports:
+                # 格式: COM3 - USB Serial Port (CH340)
+                display_name = f"{port.device}"
+                if port.description and port.description != port.device:
+                    display_name += f" - {port.description}"
+                elif port.manufacturer:
+                    display_name += f" - {port.manufacturer}"
+                
+                new_items.append(display_name)
+                new_map[display_name] = port.device
+            
+            # 检查列表是否有变化
+            current_items = [self.portBox.itemText(i) for i in range(self.portBox.count())]
+            if new_items != current_items:
+                # 列表有变化，更新
+                self.portBox.clear()
+                self.port_device_map = new_map
+                self.portBox.addItems(new_items)
+                
+                # 尝试恢复之前的选择
+                if current_device:
+                    for i, (display, device) in enumerate(new_map.items()):
+                        if device == current_device:
+                            self.portBox.setCurrentIndex(i)
+                            break
+        except Exception as e:
             self.portBox.clear()
-            ports = [p.device for p in lp.comports()]
-            self.portBox.addItems(ports)
-        except Exception:
-            self.portBox.clear()
+            self.port_device_map = {}
 
     def _updateButtons(self, connected: bool):
         self.btnConnect.setEnabled(not connected)
@@ -178,8 +243,15 @@ class MainWindow(QMainWindow):
         self.btnRead.setEnabled(connected)
         self.btnWrite.setEnabled(connected)
 
+    def _onRefreshPortClicked(self):
+        """手动刷新串口列表"""
+        self._refreshPorts()
+        self.status.showMessage('串口列表已刷新', 1500)
+    
     def _onConnect(self):
-        port = self.portBox.currentText()
+        display_name = self.portBox.currentText()
+        # 从映射中获取实际设备名称
+        port = self.port_device_map.get(display_name, display_name)
         self.worker.connectPort(port)
 
     def _onDisconnect(self):
@@ -224,10 +296,14 @@ class MainWindow(QMainWindow):
         if ok:
             self._setStatusLight('green')
             self.status.showMessage('已连接', 3000)
+            # 更新烧录标签页的串口状态
+            self.flash_tab.set_serial_port(self.worker.ser, self.worker)
         else:
             self._setStatusLight('red')
             self.model.reload(self.groupBox.currentText())
             self.status.showMessage('连接失败或已断开，映射已刷新', 3000)
+            # 清除烧录标签页的串口状态
+            self.flash_tab.set_serial_port(None, None)
 
     def _onFrameSent(self, hexstr: str):
         # Check if this is a REPLY frame (hex for REPLY: is 5245504C593A)
@@ -238,6 +314,13 @@ class MainWindow(QMainWindow):
 
     def _onFrameRecv(self, hexstr: str):
         self.logView.appendPlainText('RECV: ' + hexstr)
+
+        # 如果正在烧录，将帧转发给烧录标签页
+        try:
+            frame_bytes = bytes.fromhex(hexstr)
+            self.flash_tab.handle_received_data(frame_bytes)
+        except Exception:
+            pass
 
     def _onRawRecv(self, hexstr: str):
         # Format: [RX] HEX...

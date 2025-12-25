@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(.venvScriptspython.exe gui/views/MainWindow.py)",
+      "Bash(\".venv/Scripts/python.exe\" gui/views/MainWindow.py)"
+    ]
+  }
+}
