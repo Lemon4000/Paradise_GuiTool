@@ -25,12 +25,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller pyside6 pillow
+          python -m pip install pyinstaller pyside6 pillow pyserial
 
       - name: Build EXE (one-file)
         shell: pwsh
         run: |
-          python -m PyInstaller -F --noconsole --icon "ICON.png" -n UsartGUI gui/main.py --add-data "config;config" --runtime-tmpdir . --clean
+          python -m PyInstaller -F --noconsole --icon "ICON.png" -n UsartGUI gui/main.py --add-data "config;config" --hidden-import serial.tools.list_ports_windows --hidden-import serial.tools.list_ports --runtime-tmpdir . --clean
 
       - name: Package zip
         shell: pwsh
