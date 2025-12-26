@@ -216,6 +216,21 @@ class FlashTab(QWidget):
 
         btn_layout.addWidget(self.btn_browse)
         btn_layout.addWidget(self.chk_debug)
+        
+        # 初始化重试延迟输入框
+        from PySide6.QtWidgets import QSpinBox
+        init_retry_layout = QHBoxLayout()
+        init_retry_layout.setSpacing(4)
+        init_retry_layout.addWidget(QLabel("初始化重试延迟(ms):"))
+        self.spin_init_retry = QSpinBox()
+        self.spin_init_retry.setMinimum(10)
+        self.spin_init_retry.setMaximum(5000)
+        self.spin_init_retry.setValue(50)
+        self.spin_init_retry.setSingleStep(10)
+        self.spin_init_retry.setToolTip("调整初始化命令的重试延迟时间（毫秒），默认50ms")
+        init_retry_layout.addWidget(self.spin_init_retry)
+        btn_layout.addLayout(init_retry_layout)
+        
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_abort)
@@ -455,6 +470,7 @@ class FlashTab(QWidget):
 
         # 创建worker
         self.flash_worker = FlashWorker()
+        self.flash_worker.init_retry_delay = self.spin_init_retry.value()  # 应用输入框的初始化重试延迟
         self.flash_worker.sigProgress.connect(self.on_progress)
         self.flash_worker.sigCompleted.connect(self.on_completed)
         self.flash_worker.sigLog.connect(self.on_log)

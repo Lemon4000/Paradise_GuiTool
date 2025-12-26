@@ -61,6 +61,7 @@ class FlashWorker(QObject):
         self.err_data = 0  # 数据错误计数
         self.err_total = 0  # 总错误计数
         self.flash_start_ts = None  # 烧录开始时间戳
+        self.init_retry_delay = 50  # 初始化重试延迟(ms)，默认50ms
 
         # 超时定时器
         self.timeout_timer = QTimer()
@@ -621,6 +622,12 @@ class FlashWorker(QObject):
             max_retries = self.max_verify_retries
             current_retries = self.verify_retries
             retry_delay = 500  # VERIFY阶段延迟500ms
+        elif self.state == FlashState.WAIT_INIT:
+            self.retry_count += 1
+            self.consecutive_errors += 1
+            max_retries = self.max_retries
+            current_retries = self.retry_count
+            retry_delay = self.init_retry_delay  # 初始化阶段使用可配置延迟
         else:
             self.retry_count += 1
             self.consecutive_errors += 1
