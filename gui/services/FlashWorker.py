@@ -4,6 +4,7 @@
 """
 from PySide6.QtCore import QObject, Signal, QTimer
 from enum import Enum
+from typing import Optional
 import time
 import Usart_Para_FK as proto
 from hex_parser import HexParser
@@ -55,11 +56,33 @@ class FlashWorker(QObject):
         self.debug_mode = False  # 调试模式：手动推进、提示期望响应
         self.crc_accumulate_count = 0  # CRC累加次数计数器
         self.accumulated_crc_list = []  # 存储每块参与累加的CRC值
+        self.err_crc = 0  # 错误CRC计数
+        self.err_format = 0  # 格式错误计数
+        self.err_data = 0  # 数据错误计数
+        self.err_total = 0  # 总错误计数
+        self.flash_start_ts = None  # 烧录开始时间戳
 
         # 超时定时器
         self.timeout_timer = QTimer()
         self.timeout_timer.setSingleShot(True)
         self.timeout_timer.timeout.connect(self._on_timeout)
+
+    def _log_error(self, err_type: str, expected: str, actual: str, frame: Optional[bytes]):
+        """统一记录错误并统计次数。"""
+        self.err_total += 1
+        if err_type == "CRC_MISMATCH":
+            self.err_crc += 1
+        elif err_type == "FORMAT_ERROR":
+            self.err_format += 1
+        elif err_type == "DATA_MISMATCH":
+            self.err_data += 1
+
+        frame_hex = frame.hex().upper() if frame else "(无帧)"
+        self.sigLog.emit(
+            f"[ERROR] {err_type} #{self.err_total} (CRC:{self.err_crc},FMT:{self.err_format},DATA:{self.err_data}) "
+            f"期望:{expected} 实际:{actual} 帧:{frame_hex}"
+        )
+        self.sigErrorDetail.emit(err_type, expected, actual)
 
     def start_flash(self, ser, hex_file_path: str, debug_mode: bool = False):
         """开始烧录"""
@@ -74,6 +97,11 @@ class FlashWorker(QObject):
             self.debug_mode = debug_mode
             self.crc_accumulate_count = 0  # 重置累加计数器
             self.accumulated_crc_list = []  # 重置CRC值列表
+            self.err_crc = 0
+            self.err_format = 0
+            self.err_data = 0
+            self.err_total = 0
+            self.flash_start_ts = time.time()
 
             # 读取配置
             self.cfg = proto._read_protocol_cfg()
@@ -140,10 +168,18 @@ class FlashWorker(QObject):
             self._send_verify_command()
         elif new_state == FlashState.SUCCESS:
             self.timeout_timer.stop()
+            if self.flash_start_ts is not None:
+                duration = time.time() - self.flash_start_ts
+                self.sigLog.emit(f"烧录耗时 {duration:.2f} 秒")
+                self.flash_start_ts = None
             self.sigProgress.emit(100, "烧录成功")
             self.sigCompleted.emit(True, "固件烧录成功")
         elif new_state == FlashState.FAILED:
             self.timeout_timer.stop()
+            if self.flash_start_ts is not None:
+                duration = time.time() - self.flash_start_ts
+                self.sigLog.emit(f"烧录耗时 {duration:.2f} 秒")
+                self.flash_start_ts = None
             self.sigCompleted.emit(False, "固件烧录失败")
 
     def _send_init_command(self):
@@ -182,11 +218,8 @@ class FlashWorker(QObject):
 
             # 验证CRC
             if recv_crc != calc_crc:
-                self.sigLog.emit("初始化响应CRC校验失败")
-                self.sigErrorDetail.emit("CRC_MISMATCH",
-                                        calc_crc.hex().upper(),
-                                        recv_crc.hex().upper())
-                self._retry_or_fail(5000)
+                self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
+                self._retry_or_fail(5000, immediate=True)
                 return
 
             # 解析响应
@@ -202,7 +235,7 @@ class FlashWorker(QObject):
                 self._transition_to(FlashState.ERASE)
             else:
                 self.sigLog.emit(f"初始化响应格式错误")
-                self.sigErrorDetail.emit("FORMAT_ERROR", expected, received)
+                self._log_error("FORMAT_ERROR", expected, received, frame)
                 self._retry_or_fail(5000)
 
         except Exception as e:
@@ -248,11 +281,8 @@ class FlashWorker(QObject):
 
             # 验证CRC
             if recv_crc != calc_crc:
-                self.sigLog.emit("擦除响应CRC校验失败")
-                self.sigErrorDetail.emit("CRC_MISMATCH",
-                                        calc_crc.hex().upper(),
-                                        recv_crc.hex().upper())
-                self._retry_or_fail(10000)
+                self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
+                self._retry_or_fail(10000, immediate=True)
                 return
 
             # 解析响应
@@ -269,7 +299,7 @@ class FlashWorker(QObject):
                 self._transition_to(FlashState.PROGRAM)
             else:
                 self.sigLog.emit(f"擦除响应格式错误")
-                self.sigErrorDetail.emit("FORMAT_ERROR", expected, received)
+                self._log_error("FORMAT_ERROR", expected, received, frame)
                 self._retry_or_fail(10000)
 
         except Exception as e:
@@ -331,11 +361,8 @@ class FlashWorker(QObject):
 
             # 验证CRC
             if recv_crc != calc_crc:
-                self.sigLog.emit("编程响应CRC校验失败")
-                self.sigErrorDetail.emit("CRC_MISMATCH",
-                                        calc_crc.hex().upper(),
-                                        recv_crc.hex().upper())
-                self._retry_or_fail(2000)
+                self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
+                self._retry_or_fail(2000, immediate=True)
                 return
 
             # 解析响应: #HEX:REPLY[上一帧CRC];[CRC]
@@ -348,8 +375,7 @@ class FlashWorker(QObject):
             # 找到REPLY后的部分
             if not payload.startswith(expected_prefix.encode('ascii')):
                 payload_str = payload.decode('ascii', errors='ignore')
-                self.sigLog.emit(f"编程响应格式错误")
-                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
                 self._retry_or_fail(2000)
                 return
 
@@ -359,8 +385,7 @@ class FlashWorker(QObject):
             semicolon_pos = payload.find(b';', prefix_len)
             if semicolon_pos == -1:
                 payload_str = payload.decode('ascii', errors='ignore')
-                self.sigLog.emit(f"编程响应格式错误: 缺少分号")
-                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
                 self._retry_or_fail(2000)
                 return
             
@@ -372,8 +397,7 @@ class FlashWorker(QObject):
                 if reply_crc_bytes != self.last_sent_crc:
                     sent_crc_hex = self.last_sent_crc.hex().upper()
                     reply_crc_hex = reply_crc_bytes.hex().upper()
-                    self.sigLog.emit(f"回复CRC不匹配")
-                    self.sigErrorDetail.emit("DATA_MISMATCH", sent_crc_hex, reply_crc_hex)
+                    self._log_error("DATA_MISMATCH", sent_crc_hex, reply_crc_hex, frame)
                     self._retry_or_fail(2000)
                     return
 
@@ -455,11 +479,8 @@ class FlashWorker(QObject):
 
             # 验证CRC
             if recv_crc != calc_crc:
-                self.sigLog.emit("校验响应CRC校验失败")
-                self.sigErrorDetail.emit("CRC_MISMATCH",
-                                        calc_crc.hex().upper(),
-                                        recv_crc.hex().upper())
-                self._transition_to(FlashState.FAILED)
+                self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
+                self._retry_or_fail(2000, immediate=True)
                 return
 
             # 解析响应
@@ -470,9 +491,8 @@ class FlashWorker(QObject):
             expected_prefix = f"{rx_start}HEX:REPLY"
 
             if not payload_str.startswith(expected_prefix):
-                self.sigLog.emit(f"校验响应格式错误")
-                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str)
-                self._transition_to(FlashState.FAILED)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
+                self._retry_or_fail(2000, immediate=True)
                 return
 
             # 提取回复的CRC (REPLY后到;之前的内容)
@@ -480,9 +500,8 @@ class FlashWorker(QObject):
             semicolon_pos = payload_str.find(';')
             
             if semicolon_pos == -1:
-                self.sigLog.emit(f"校验响应格式错误: 缺少分号")
-                self.sigErrorDetail.emit("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str)
-                self._transition_to(FlashState.FAILED)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
+                self._retry_or_fail(2000, immediate=True)
                 return
             
             reply_crc_str = payload_str[prefix_len:semicolon_pos]  # 提取[hex]部分
@@ -492,9 +511,8 @@ class FlashWorker(QObject):
             reply_crc_clean = reply_crc_str.replace(' ', '').upper()
 
             if reply_crc_clean != expected_crc:
-                self.sigLog.emit(f"校验CRC不匹配")
-                self.sigErrorDetail.emit("DATA_MISMATCH", expected_crc, reply_crc_str)
-                self._transition_to(FlashState.FAILED)
+                self._log_error("DATA_MISMATCH", expected_crc, reply_crc_str, frame)
+                self._retry_or_fail(2000, immediate=True)
                 return
 
             self.sigLog.emit("校验成功")
@@ -595,8 +613,8 @@ class FlashWorker(QObject):
 
         return frame[pre_len:len(frame)-cs_len] if cs_len else frame[pre_len:]
 
-    def _retry_or_fail(self, timeout_ms: int):
-        """重试或失败"""
+    def _retry_or_fail(self, timeout_ms: int, immediate: bool = False):
+        """重试或失败，immediate=True 时先立即重发一次。"""
         # VERIFY阶段使用独立的重试计数
         if self.state == FlashState.WAIT_VERIFY:
             self.verify_retries += 1
@@ -617,6 +635,11 @@ class FlashWorker(QObject):
                 return
             
         if current_retries < max_retries:
+            # 首次重试且请求立即重发，则直接调用一次
+            if immediate and current_retries == 1:
+                self.sigLog.emit(f"重试 ({current_retries}/{max_retries})，立即重发")
+                self._do_retry()
+                return
             self.sigLog.emit(f"重试 ({current_retries}/{max_retries})，延迟{retry_delay}ms...")
             QTimer.singleShot(retry_delay, self._do_retry)
         else:
