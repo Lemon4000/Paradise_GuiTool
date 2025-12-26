@@ -550,58 +550,61 @@ class FlashWorker(QObject):
             self._transition_to(FlashState.FAILED)
 
     def _handle_verify_response(self, frame: bytes):
-        """处理校验响应: #HEX:REPLY[总CRC];[CRC]"""
+        """处理校验响应: #HEX:REPLY[总CRC(原始2字节)];[CRC]
+
+        注意：设备返回的 [总CRC] 为原始二进制2字节，通常为小端序，不能按ASCII解析。
+        """
         try:
-            # 提取实际接收的CRC
+            # 提取实际接收的帧CRC并校验负载
             recv_crc = self._get_frame_crc(frame)
             payload = self._extract_payload(frame)
 
-            # 计算期望的CRC
             calc_crc = proto._checksum_bytes(payload, self.cfg.get('Checksum', 'CRC16_MODBUS'))
-
-            # 验证CRC
             if recv_crc != calc_crc:
                 self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 解析响应
+            # 检查前缀并以字节方式提取 REPLY 后的 CRC 字段
             rx_start = (self.cfg.get('RxStart', '#') or '#')[0]
-
-            # 检查是否是REPLY响应
-            payload_str = payload.decode('ascii', errors='ignore')
-            expected_prefix = f"{rx_start}HEX:REPLY"
-
-            if not payload_str.startswith(expected_prefix):
-                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
+            expected_prefix = f"{rx_start}HEX:REPLY".encode('ascii')
+            if not payload.startswith(expected_prefix):
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[hex];", payload_str, frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 提取回复的CRC (REPLY后到;之前的内容)
+            # REPLY 后到分号 ';' 之前是原始2字节CRC
             prefix_len = len(expected_prefix)
-            semicolon_pos = payload_str.find(';')
-            
+            semicolon_pos = payload.find(b';', prefix_len)
             if semicolon_pos == -1:
-                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[hex];", payload_str, frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
-            
-            reply_crc_str = payload_str[prefix_len:semicolon_pos]  # 提取[hex]部分
 
-            # 验证回复的总CRC
-            expected_crc = f"{self.total_data_crc:04X}"
-            reply_crc_clean = reply_crc_str.replace(' ', '').upper()
+            reply_crc_bytes = payload[prefix_len:semicolon_pos]
 
-            if reply_crc_clean != expected_crc:
-                self._log_error("DATA_MISMATCH", expected_crc, reply_crc_str, frame)
+            # 期望的总CRC（接受设备返回小端/大端任一形式，以提高兼容性）
+            expected_le = self.total_data_crc.to_bytes(2, byteorder='little')
+            expected_be = self.total_data_crc.to_bytes(2, byteorder='big')
+
+            if reply_crc_bytes != expected_le and reply_crc_bytes != expected_be:
+                self._log_error(
+                    "DATA_MISMATCH",
+                    self.total_data_crc.to_bytes(2, 'big').hex().upper(),
+                    reply_crc_bytes.hex().upper(),
+                    frame,
+                )
                 self._retry_or_fail(2000, immediate=True)
                 return
 
             self._emit_log("校验成功")
-            self.sigVerifyOk.emit(expected_crc, reply_crc_str)
+            # 统一上报期望/实际为人类可读的大端HEX
+            self.sigVerifyOk.emit(f"{self.total_data_crc:04X}", reply_crc_bytes.hex().upper())
             self.timeout_timer.stop()
-            self.consecutive_errors = 0  # 重置连续错误计数
-            self.verify_retries = 0  # 重置VERIFY重试计数
+            self.consecutive_errors = 0
+            self.verify_retries = 0
             self._transition_to(FlashState.SUCCESS)
 
         except Exception as e:
