@@ -608,7 +608,7 @@ class FlashWorker(QObject):
             self.consecutive_errors += 1
             max_retries = self.max_retries
             current_retries = self.retry_count
-            retry_delay = 200  # 其他阶段延迟200ms
+            retry_delay = 1000  # 其他阶段延迟1000ms
             
             # 检查连续错误是否过多（仅非VERIFY阶段）
             if self.consecutive_errors >= self.max_consecutive_errors:
