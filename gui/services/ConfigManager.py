@@ -5,7 +5,20 @@ Save and load user configurations, including baud rate list, default baud rate, 
 """
 import json
 import os
+import sys
 from typing import List, Optional
+
+# 日志输出控制
+ENABLE_LOGGING = True
+try:
+    # 尝试从 config 模块导入
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    _root_dir = os.path.dirname(os.path.dirname(_current_dir))
+    sys.path.insert(0, _root_dir)
+    from config.config import ENABLE_LOGGING
+except (ImportError, ModuleNotFoundError):
+    # 如果导入失败，使用默认值
+    ENABLE_LOGGING = True
 
 
 class ConfigManager:
@@ -34,7 +47,8 @@ class ConfigManager:
                         if key in loaded_config:
                             self.config[key] = loaded_config[key]
             except Exception as e:
-                print(f"Failed to load config: {e}")
+                if ENABLE_LOGGING:
+                    print(f"Failed to load config: {e}")
                 self.config = self.DEFAULT_CONFIG.copy()
         else:
             self.save()
@@ -46,7 +60,8 @@ class ConfigManager:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"Failed to save config: {e}")
+            if ENABLE_LOGGING:
+                print(f"Failed to save config: {e}")
     
     def get_baud_rates(self) -> List[int]:
         """Get all baud rates (including custom)"""

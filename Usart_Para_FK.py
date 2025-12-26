@@ -2,6 +2,7 @@ import os
 import csv
 import struct
 import time
+import sys
 from typing import Dict, Tuple, List
 
 try:
@@ -13,6 +14,16 @@ try:
     import serial
 except Exception:
     serial = None
+
+# 日志输出控制
+ENABLE_LOGGING = True
+try:
+    # 尝试从 config 模块导入
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from config.config import ENABLE_LOGGING
+except (ImportError, ModuleNotFoundError):
+    # 如果导入失败，使用默认值
+    ENABLE_LOGGING = True
 
 def _crc16_modbus(data: bytes) -> int:
     crc = 0xFFFF
@@ -279,12 +290,14 @@ if __name__ == '__main__':
             'A18': 100.0,'A19': 115.0
         }
         f = build_frame('A', vals)
-        print(f.hex())
-        print(parse_frame(f))
+        if ENABLE_LOGGING:
+            print(f.hex())
+            print(parse_frame(f))
     elif args[0] == 'read' and len(args) >= 3:
         port = args[1]
         group = args[2]
-        print(read_group(port, group))
+        if ENABLE_LOGGING:
+            print(read_group(port, group))
     elif args[0] == 'write' and len(args) >= 3:
         port = args[1]
         group = args[2]
@@ -297,12 +310,14 @@ if __name__ == '__main__':
                 except Exception:
                     pass
         ok = write_group(port, group, kvs)
-        print('OK' if ok else 'FAIL')
+        if ENABLE_LOGGING:
+            print('OK' if ok else 'FAIL')
     else:
-        print('用法:')
-        print('  python Usart_Para_FK.py               # 构建并解析示例 A 组帧')
-        print('  python Usart_Para_FK.py read COMx A   # 读取 A 组')
-        print('  python Usart_Para_FK.py write COMx A A0=14.00 A1=60.00 ...')
+        if ENABLE_LOGGING:
+            print('用法:')
+            print('  python Usart_Para_FK.py               # 构建并解析示例 A 组帧')
+            print('  python Usart_Para_FK.py read COMx A   # 读取 A 组')
+            print('  python Usart_Para_FK.py write COMx A A0=14.00 A1=60.00 ...')
 
 def format_group_csv(group: str) -> bool:
     rows = _read_group_mapping(group)

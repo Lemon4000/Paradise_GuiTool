@@ -4,6 +4,18 @@ Intel HEX 文件解析器
 """
 from typing import List, Tuple, Dict
 import struct
+import os
+import sys
+
+# 日志输出控制
+ENABLE_LOGGING = True
+try:
+    # 尝试从 config 模块导入
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from config.config import ENABLE_LOGGING
+except (ImportError, ModuleNotFoundError):
+    # 如果导入失败，使用默认值
+    ENABLE_LOGGING = True
 
 
 class HexRecord:
@@ -83,7 +95,8 @@ class HexParser:
             return True
 
         except Exception as e:
-            print(f"解析HEX文件失败: {e}")
+            if ENABLE_LOGGING:
+                print(f"解析HEX文件失败: {e}")
             return False
 
     def _parse_line(self, line: str, extended_address: int) -> HexRecord:
@@ -120,7 +133,8 @@ class HexParser:
             return HexRecord(full_address, data, record_type)
 
         except Exception as e:
-            print(f"解析行失败: {e}")
+            if ENABLE_LOGGING:
+                print(f"解析行失败: {e}")
             return None
 
     def get_data_blocks(self, block_size: int = 256) -> List[Tuple[int, bytes]]:
@@ -171,4 +185,5 @@ class HexParser:
 if __name__ == '__main__':
     # 测试代码
     parser = HexParser()
-    print("HEX解析器模块")
+    if ENABLE_LOGGING:
+        print("HEX解析器模块")

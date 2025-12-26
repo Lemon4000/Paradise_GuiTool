@@ -10,8 +10,17 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFontDatabase
 import os
+import sys
 from gui.services.FlashWorker import FlashWorker, FlashState
 from hex_parser import HexParser
+
+# 导入日志控制配置
+ENABLE_LOGGING = True
+try:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from config.config import ENABLE_LOGGING
+except (ImportError, ModuleNotFoundError):
+    ENABLE_LOGGING = True
 
 
 class DropArea(QFrame):
@@ -131,16 +140,18 @@ class FlashTab(QWidget):
             hex_lines.append(hex_part)
             ascii_lines.append(ascii_part)
 
-        if html_color:
-            lines.append(f'<span style="color:#999;">总长度 {total} 字节</span>')
-            if total >= 2:
-                crc = data[-2:]
-                lines.append(f'<span style="color:#999;">CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}</span>')
-        else:
-            lines.append(f"总长度 {total} 字节")
-            if total >= 2:
-                crc = data[-2:]
-                lines.append(f"CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}")
+        # 根据 ENABLE_LOGGING 决定是否输出总长度和CRC信息
+        if ENABLE_LOGGING:
+            if html_color:
+                lines.append(f'<span style="color:#999;">总长度 {total} 字节</span>')
+                if total >= 2:
+                    crc = data[-2:]
+                    lines.append(f'<span style="color:#999;">CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}</span>')
+            else:
+                lines.append(f"总长度 {total} 字节")
+                if total >= 2:
+                    crc = data[-2:]
+                    lines.append(f"CRC(末尾2字节假定为CRC16): 0x{crc.hex().upper()}")
 
         if return_parts:
             return '\n'.join(lines), '\n'.join(addr_lines), '\n'.join(hex_lines), '\n'.join(ascii_lines)
@@ -199,7 +210,10 @@ class FlashTab(QWidget):
 
         self.chk_debug = QCheckBox("调试模式(手动下一步)")
         self.chk_debug.setToolTip("启用后发送指令后无需等待回应，点击‘下一步’手动推进流程，日志会提示期望回应。")
-
+        self.chk_enable_logging = QCheckBox("启用日志输出")
+        self.chk_enable_logging.setChecked(ENABLE_LOGGING)
+        self.chk_enable_logging.setToolTip("控制是否显示烧录过程日志、帧数据等详细信息")
+        self.chk_enable_logging.stateChanged.connect(self._on_logging_changed)
         self.btn_start = QPushButton("开始烧录")
         self.btn_start.setEnabled(False)
         self.btn_start.clicked.connect(self.on_start_clicked)
@@ -216,6 +230,7 @@ class FlashTab(QWidget):
 
         btn_layout.addWidget(self.btn_browse)
         btn_layout.addWidget(self.chk_debug)
+        btn_layout.addWidget(self.chk_enable_logging)
         
         # 初始化重试延迟输入框
         from PySide6.QtWidgets import QSpinBox
@@ -485,6 +500,8 @@ class FlashTab(QWidget):
         self.flash_worker = FlashWorker()
         self.flash_worker.init_retry_delay = self.spin_init_retry.value()  # 应用输入框的初始化重试延迟
         self.flash_worker.program_retry_delay = self.spin_program_retry.value()  # 应用编程重试延迟
+        # 设置日志启用回调
+        self.flash_worker.set_logging_enabled_callback(lambda: self.chk_enable_logging.isChecked())
         self.flash_worker.sigProgress.connect(self.on_progress)
         self.flash_worker.sigCompleted.connect(self.on_completed)
         self.flash_worker.sigLog.connect(self.on_log)
@@ -527,6 +544,14 @@ class FlashTab(QWidget):
             QMessageBox.critical(self, "失败", message)
             self.lbl_status.setText("烧录失败")
 
+    def _on_logging_changed(self, state: int):
+        """日志启用状态改变"""
+        enabled = self.chk_enable_logging.isChecked()
+        if enabled:
+            self.status_log_view.append("[系统] 日志输出已启用")
+        else:
+            self.status_log_view.append("[系统] 日志输出已禁用")
+    
     def on_log(self, message: str):
         """状态日志消息"""
         import time
@@ -535,6 +560,10 @@ class FlashTab(QWidget):
 
     def on_frame_sent(self, hex_str: str):
         """发送帧"""
+        # 如果禁用日志，则不显示任何内容
+        if not self.chk_enable_logging.isChecked():
+            return
+            
         import time
         timestamp = time.strftime("%H:%M:%S")
 
@@ -561,6 +590,10 @@ class FlashTab(QWidget):
 
     def on_frame_recv(self, hex_str: str):
         """接收帧"""
+        # 如果禁用日志，则不显示任何内容
+        if not self.chk_enable_logging.isChecked():
+            return
+            
         import time
         timestamp = time.strftime("%H:%M:%S")
 
