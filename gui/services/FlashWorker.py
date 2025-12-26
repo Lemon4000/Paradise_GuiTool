@@ -62,6 +62,11 @@ class FlashWorker(QObject):
         self.err_total = 0  # 总错误计数
         self.flash_start_ts = None  # 烧录开始时间戳
         self.init_retry_delay = 50  # 初始化重试延迟(ms)，默认50ms
+        self.init_start_time = None  # 初始化开始时间（用于计算总时间）
+        self.init_timeout = 5000  # 初始化总超时时间(ms)
+        self.program_retry_delay = 50  # 编程数据重试延迟(ms)，默认50ms
+        self.program_start_time = None  # 当前数据块发送开始时间
+        self.program_timeout = 2000  # 单个数据块总超时时间(ms)
 
         # 超时定时器
         self.timeout_timer = QTimer()
@@ -183,10 +188,26 @@ class FlashWorker(QObject):
                 self.flash_start_ts = None
             self.sigCompleted.emit(False, "固件烧录失败")
 
-    def _send_init_command(self):
-        """发送初始化命令: !HEX;[CRC]"""
+    def _send_init_command(self, is_retry: bool = False):
+        """发送初始化命令: !HEX;[CRC]
+        
+        Args:
+            is_retry: 是否为重试发送
+        """
         try:
-            self.sigLog.emit("发送初始化命令...")
+            # 首次发送：记录开始时间
+            if not is_retry:
+                self.init_start_time = time.time()
+                self.sigLog.emit("发送初始化命令...")
+            else:
+                # 重试：检查总时间是否超过5秒
+                elapsed_ms = (time.time() - self.init_start_time) * 1000
+                if elapsed_ms >= self.init_timeout:
+                    self.sigLog.emit(f"初始化总超时 ({elapsed_ms:.0f}ms >= {self.init_timeout}ms)")
+                    self._transition_to(FlashState.FAILED)
+                    return
+                self.sigLog.emit(f"重试发送初始化命令 (已用时:{elapsed_ms:.0f}ms)...")
+            
             tx_start = (self.cfg.get('TxStart', '!') or '!')[0]
             payload = f"{tx_start}HEX;".encode('ascii')
             frame = self._build_frame(payload)
@@ -196,12 +217,15 @@ class FlashWorker(QObject):
             self.last_sent_crc = self._get_frame_crc(frame)
 
             self.state = FlashState.WAIT_INIT
-            if not self.debug_mode:
-                self.timeout_timer.start(5000)  # 5秒超时
             self.sigProgress.emit(5, "等待初始化响应...")
+            
+            # 首次发送：启动周期性重试定时器
+            if not is_retry and not self.debug_mode:
+                self.timeout_timer.start(self.init_retry_delay)  # 按用户设置的间隔触发重试
 
             # 调试模式提示期望响应
-            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX;")
+            if self.debug_mode:
+                self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX;")
 
         except Exception as e:
             self.sigLog.emit(f"发送初始化命令失败: {str(e)}")
@@ -219,6 +243,7 @@ class FlashWorker(QObject):
 
             # 验证CRC
             if recv_crc != calc_crc:
+                self.timeout_timer.stop()  # 停止周期性定时器
                 self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
                 self._retry_or_fail(5000, immediate=True)
                 return
@@ -235,6 +260,7 @@ class FlashWorker(QObject):
                 self.consecutive_errors = 0  # 重置连续错误计数
                 self._transition_to(FlashState.ERASE)
             else:
+                self.timeout_timer.stop()  # 停止周期性定时器
                 self.sigLog.emit(f"初始化响应格式错误")
                 self._log_error("FORMAT_ERROR", expected, received, frame)
                 self._retry_or_fail(5000)
@@ -307,8 +333,12 @@ class FlashWorker(QObject):
             self.sigLog.emit(f"处理擦除响应异常: {str(e)}")
             self._retry_or_fail(10000)
 
-    def _send_program_data(self):
-        """发送编程数据: !HEX:START[addr].SIZE[size]，DATA[data];[CRC]"""
+    def _send_program_data(self, is_retry: bool = False):
+        """发送编程数据: !HEX:START[addr].SIZE[size]，DATA[data];[CRC]
+        
+        Args:
+            is_retry: 是否为重试发送
+        """
         try:
             if self.current_block_index >= len(self.data_blocks):
                 # 所有数据块发送完成
@@ -316,14 +346,30 @@ class FlashWorker(QObject):
                 self._transition_to(FlashState.VERIFY)
                 return
 
+            # 首次发送：记录开始时间
+            if not is_retry:
+                self.program_start_time = time.time()
+            else:
+                # 重试：检查总时间是否超过2秒
+                elapsed_ms = (time.time() - self.program_start_time) * 1000
+                if elapsed_ms >= self.program_timeout:
+                    self.sigLog.emit(f"数据块{self.current_block_index + 1}总超时 ({elapsed_ms:.0f}ms >= {self.program_timeout}ms)")
+                    self._retry_or_fail(2000)  # 使用常规重试机制
+                    return
+
             # 获取当前数据块
             address, data = self.data_blocks[self.current_block_index]
             # 注意：不要在发送阶段累加数据块CRC，避免重试导致重复累加
             # 改为在收到该块成功回复后再累加（见 _handle_program_response）
 
             progress = int((self.current_block_index / len(self.data_blocks)) * 80) + 10
-            self.sigLog.emit(f"发送数据块 {self.current_block_index + 1}/{len(self.data_blocks)} " +
-                           f"(地址:0x{address:08X}, 大小:{len(data)}字节)")
+            if is_retry:
+                elapsed_ms = (time.time() - self.program_start_time) * 1000
+                self.sigLog.emit(f"重试发送数据块 {self.current_block_index + 1}/{len(self.data_blocks)} " +
+                               f"(已用时:{elapsed_ms:.0f}ms, 地址:0x{address:08X})")
+            else:
+                self.sigLog.emit(f"发送数据块 {self.current_block_index + 1}/{len(self.data_blocks)} " +
+                               f"(地址:0x{address:08X}, 大小:{len(data)}字节)")
 
             tx_start = (self.cfg.get('TxStart', '!') or '!')[0]
             # DATA后直接跟原始二进制数据，而不是ASCII字符串
@@ -336,15 +382,18 @@ class FlashWorker(QObject):
             self.last_sent_crc = self._get_frame_crc(frame)
 
             self.state = FlashState.WAIT_PROGRAM
-            if not self.debug_mode:
-                self.timeout_timer.start(2000)  # 2秒超时
             self.sigProgress.emit(progress, f"编程数据块 {self.current_block_index + 1}/{len(self.data_blocks)}...")
+
+            # 首次发送：启动周期性重试定时器
+            if not is_retry and not self.debug_mode:
+                self.timeout_timer.start(self.program_retry_delay)  # 按用户设置的间隔触发重试
 
             if self.last_sent_crc:
                 exp_crc = self.last_sent_crc.hex().upper()
             else:
                 exp_crc = "(未知CRC)"
-            self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{exp_crc}]")
+            if self.debug_mode:
+                self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{exp_crc}]")
 
         except Exception as e:
             self.sigLog.emit(f"发送编程数据失败: {str(e)}")
@@ -375,6 +424,7 @@ class FlashWorker(QObject):
             
             # 找到REPLY后的部分
             if not payload.startswith(expected_prefix.encode('ascii')):
+                self.timeout_timer.stop()  # 停止周期性定时器
                 payload_str = payload.decode('ascii', errors='ignore')
                 self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
                 self._retry_or_fail(2000)
@@ -385,6 +435,7 @@ class FlashWorker(QObject):
             # 找到;的位置
             semicolon_pos = payload.find(b';', prefix_len)
             if semicolon_pos == -1:
+                self.timeout_timer.stop()  # 停止周期性定时器
                 payload_str = payload.decode('ascii', errors='ignore')
                 self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
                 self._retry_or_fail(2000)
@@ -396,6 +447,7 @@ class FlashWorker(QObject):
             # 验证回复的CRC是否匹配上次发送的CRC
             if self.last_sent_crc:
                 if reply_crc_bytes != self.last_sent_crc:
+                    self.timeout_timer.stop()  # 停止周期性定时器
                     sent_crc_hex = self.last_sent_crc.hex().upper()
                     reply_crc_hex = reply_crc_bytes.hex().upper()
                     self._log_error("DATA_MISMATCH", sent_crc_hex, reply_crc_hex, frame)
@@ -616,18 +668,63 @@ class FlashWorker(QObject):
 
     def _retry_or_fail(self, timeout_ms: int, immediate: bool = False):
         """重试或失败，immediate=True 时先立即重发一次。"""
+        # 初始化阶段：使用时间控制而非次数控制
+        if self.state == FlashState.WAIT_INIT:
+            elapsed_ms = (time.time() - self.init_start_time) * 1000
+            if elapsed_ms >= self.init_timeout:
+                self.sigLog.emit(f"初始化总超时 ({elapsed_ms:.0f}ms >= {self.init_timeout}ms)")
+                self._transition_to(FlashState.FAILED)
+                return
+            
+            retry_delay = self.init_retry_delay
+            if immediate:
+                self.sigLog.emit(f"初始化重试，立即重发 (已用时:{elapsed_ms:.0f}ms)")
+                self._send_init_command(is_retry=True)
+                self.timeout_timer.start(retry_delay)  # 重启周期性定时器
+            else:
+                self.sigLog.emit(f"初始化重试，延迟{retry_delay}ms... (已用时:{elapsed_ms:.0f}ms)")
+                def retry_and_restart():
+                    self._send_init_command(is_retry=True)
+                    self.timeout_timer.start(retry_delay)
+                QTimer.singleShot(retry_delay, retry_and_restart)
+            return
+        
+        # PROGRAM阶段：使用时间控制而非次数控制
+        if self.state == FlashState.WAIT_PROGRAM:
+            elapsed_ms = (time.time() - self.program_start_time) * 1000
+            if elapsed_ms >= self.program_timeout:
+                self.sigLog.emit(f"数据块{self.current_block_index + 1}总超时 ({elapsed_ms:.0f}ms >= {self.program_timeout}ms)")
+                # 超时后使用常规重试次数机制
+                self.retry_count += 1
+                self.consecutive_errors += 1
+                if self.retry_count >= self.max_retries or self.consecutive_errors >= self.max_consecutive_errors:
+                    self.sigLog.emit(f"重试次数超限，停止烧录")
+                    self._transition_to(FlashState.FAILED)
+                    return
+                # 常规重试：延迟后重新发送当前块
+                self.sigLog.emit(f"延迟1000ms后重试数据块{self.current_block_index + 1}...")
+                QTimer.singleShot(1000, lambda: self._send_program_data(is_retry=False))  # 重置时间
+                return
+            
+            retry_delay = self.program_retry_delay
+            if immediate:
+                self.sigLog.emit(f"数据块{self.current_block_index + 1}重试，立即重发 (已用时:{elapsed_ms:.0f}ms)")
+                self._send_program_data(is_retry=True)
+                self.timeout_timer.start(retry_delay)  # 重启周期性定时器
+            else:
+                self.sigLog.emit(f"数据块{self.current_block_index + 1}重试，延迟{retry_delay}ms... (已用时:{elapsed_ms:.0f}ms)")
+                def retry_and_restart():
+                    self._send_program_data(is_retry=True)
+                    self.timeout_timer.start(retry_delay)
+                QTimer.singleShot(retry_delay, retry_and_restart)
+            return
+        
         # VERIFY阶段使用独立的重试计数
         if self.state == FlashState.WAIT_VERIFY:
             self.verify_retries += 1
             max_retries = self.max_verify_retries
             current_retries = self.verify_retries
             retry_delay = 500  # VERIFY阶段延迟500ms
-        elif self.state == FlashState.WAIT_INIT:
-            self.retry_count += 1
-            self.consecutive_errors += 1
-            max_retries = self.max_retries
-            current_retries = self.retry_count
-            retry_delay = self.init_retry_delay  # 初始化阶段使用可配置延迟
         else:
             self.retry_count += 1
             self.consecutive_errors += 1
@@ -657,18 +754,40 @@ class FlashWorker(QObject):
         """执行重试（延迟调用）"""
         # 重新发送当前状态的命令
         if self.state == FlashState.WAIT_INIT:
-            self._send_init_command()
+            self._send_init_command(is_retry=True)
         elif self.state == FlashState.WAIT_ERASE:
             self._send_erase_command()
         elif self.state == FlashState.WAIT_PROGRAM:
-            self._send_program_data()
+            self._send_program_data(is_retry=True)
         elif self.state == FlashState.WAIT_VERIFY:
             self._send_verify_command()
 
     def _on_timeout(self):
         """超时处理"""
-        self.sigLog.emit(f"等待响应超时 (状态: {self.state.name})")
-        self._retry_or_fail(500)
+        # 初始化阶段：周期性重试触发
+        if self.state == FlashState.WAIT_INIT:
+            elapsed_ms = (time.time() - self.init_start_time) * 1000
+            if elapsed_ms >= self.init_timeout:
+                self.sigLog.emit(f"初始化总超时 ({elapsed_ms:.0f}ms >= {self.init_timeout}ms)")
+                self._transition_to(FlashState.FAILED)
+            else:
+                # 重发并重启定时器
+                self._send_init_command(is_retry=True)
+                self.timeout_timer.start(self.init_retry_delay)
+        # PROGRAM阶段：周期性重试触发
+        elif self.state == FlashState.WAIT_PROGRAM:
+            elapsed_ms = (time.time() - self.program_start_time) * 1000
+            if elapsed_ms >= self.program_timeout:
+                self.sigLog.emit(f"数据块{self.current_block_index + 1}总超时 ({elapsed_ms:.0f}ms >= {self.program_timeout}ms)")
+                # 使用常规重试机制
+                self._retry_or_fail(2000)
+            else:
+                # 重发并重启定时器
+                self._send_program_data(is_retry=True)
+                self.timeout_timer.start(self.program_retry_delay)
+        else:
+            self.sigLog.emit(f"等待响应超时 (状态: {self.state.name})")
+            self._retry_or_fail(500)
 
     def abort(self):
         """中止烧录"""
