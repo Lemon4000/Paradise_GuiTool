@@ -419,6 +419,11 @@ class FlashWorker(QObject):
 
             if self.last_sent_crc:
                 exp_crc = self.last_sent_crc.hex().upper()
+                # 显示期望的回复格式（小端和大端两种可能）
+                crc_le = int.from_bytes(self.last_sent_crc, byteorder='little')
+                crc_be = int.from_bytes(self.last_sent_crc, byteorder='big')
+                self._emit_log(f"发送帧CRC: {exp_crc} (小端:0x{crc_le:04X}, 大端:0x{crc_be:04X})")
+                self._emit_log(f"期望下位机回复: #HEX:REPLY{crc_le:X}; 或 #HEX:REPLY{crc_be:X}; (ASCII格式)")
             else:
                 exp_crc = "(未知CRC)"
             if self.debug_mode:
@@ -456,34 +461,67 @@ class FlashWorker(QObject):
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 解析响应: #HEX:REPLY[上一帧CRC];[CRC]
+            # 解析响应: #HEX:REPLY[上一帧CRC 2字节原始数据];[CRC]
             if not payload.startswith(expected_prefix.encode('ascii')):
                 self.timeout_timer.stop()  # 停止周期性定时器
                 payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[2字节];", payload_str, frame)
                 self._retry_or_fail(2000)
                 return
 
-            # 固定长度提取回复CRC字段，避免CRC包含 ';' 时被截断
-            reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
-            # 校验紧随其后的是分号
-            if payload[prefix_len + field_len:prefix_len + field_len + 1] != b';':
+            # 解析响应: #HEX:REPLY[上一帧CRC 2字节];
+            # payload只包含到第一个分号，帧CRC在payload外面
+            if not payload.startswith(expected_prefix.encode('ascii')):
+                self.timeout_timer.stop()
                 payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{expected_prefix}[{field_len}字节];", payload_str, frame)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[2字节];", payload_str, frame)
                 self._retry_or_fail(2000)
                 return
 
-            # 验证回复的CRC是否匹配上次发送的CRC
+            # 固定格式：REPLY前缀(10字节) + 回复CRC(2字节) + ';' = 13字节
+            required_len = prefix_len + field_len + 1
+            
+            if len(payload) < required_len:
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._emit_log(f"payload长度不足: 需要{required_len}字节, 实际{len(payload)}字节, 内容:{payload_str}")
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[2字节];", payload_str, frame)
+                self._retry_or_fail(2000)
+                return
+            
+            # 按固定偏移提取回复CRC
+            reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
+            
+            # 检查分号
+            semicolon_pos = prefix_len + field_len
+            if payload[semicolon_pos:semicolon_pos + 1] != b';':
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._emit_log(f"分号位置错误 (pos={semicolon_pos}): 期望';', 实际0x{payload[semicolon_pos]:02X}")
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[2字节];", payload_str, frame)
+                self._retry_or_fail(2000)
+                return
+            
+            # 记录解析结果
+            self._emit_log(f"解析PROGRAM回复: 上一帧CRC={reply_crc_bytes.hex().upper()}")
+
+            # 验证回复的上一帧CRC是否匹配发送的帧CRC
             if self.last_sent_crc:
+                sent_crc_hex = self.last_sent_crc.hex().upper()
+                reply_crc_hex = reply_crc_bytes.hex().upper()
+                sent_crc_int = int.from_bytes(self.last_sent_crc, byteorder='little')
+                reply_crc_int = int.from_bytes(reply_crc_bytes, byteorder='little')
+                
                 if reply_crc_bytes != self.last_sent_crc:
                     self.timeout_timer.stop()  # 停止周期性定时器
-                    sent_crc_hex = self.last_sent_crc.hex().upper()
-                    reply_crc_hex = reply_crc_bytes.hex().upper()
+                    # 详细的错误信息
+                    self._emit_log(f"❌ 上一帧CRC不匹配:")
+                    self._emit_log(f"  发送帧CRC: {sent_crc_hex} = 0x{sent_crc_int:04X}(小端)")
+                    self._emit_log(f"  下位机回复: {reply_crc_hex} = 0x{reply_crc_int:04X}(小端)")
+                    self._emit_log(f"  本帧CRC: {frame_crc_bytes.hex().upper()}")
                     self._log_error("DATA_MISMATCH", sent_crc_hex, reply_crc_hex, frame)
                     self._retry_or_fail(2000)
                     return
 
-            self._emit_log(f"数据块 {self.current_block_index + 1} 编程成功")
+            self._emit_log(f"✓ 数据块 {self.current_block_index + 1} 编程成功 (上一帧CRC={reply_crc_bytes.hex().upper()})")
             if self.last_sent_crc:
                 self.sigVerifyOk.emit(self.last_sent_crc.hex().upper(), reply_crc_bytes.hex().upper())
 
@@ -587,12 +625,37 @@ class FlashWorker(QObject):
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 固定长度提取CRC字段（避免CRC字节等于 ';' 时被截断）
-            reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
-            # 校验后续分号
-            if payload[prefix_len + field_len:prefix_len + field_len + 1] != b';':
+            # 尝试解析 ASCII 十六进制格式（如 "A950"）或原始字节格式
+            # 查找分号位置
+            semicolon_pos = payload.find(b';', prefix_len)
+            if semicolon_pos == -1:
                 payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len}字节];", payload_str, frame)
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[CRC];", payload_str, frame)
+                self._retry_or_fail(2000, immediate=True)
+                return
+            
+            # 提取 REPLY 后到分号之间的内容
+            crc_field = payload[prefix_len:semicolon_pos]
+            reply_crc_bytes = None
+            
+            # 方法1: 尝试作为 ASCII 十六进制字符串解析（如 "A950"）
+            try:
+                crc_str = crc_field.decode('ascii')
+                # 期望 2*field_len 个字符（如 CRC16 是 4 个字符）
+                if len(crc_str) in [field_len * 2, field_len]:  # 兼容完整或简化格式
+                    crc_int = int(crc_str, 16)
+                    # 先按大端存储（因为 ENDCRC 发送的是大端）
+                    reply_crc_bytes = crc_int.to_bytes(field_len, byteorder='big')
+                    self._emit_log(f"解析 ASCII 十六进制总 CRC: '{crc_str}' -> 0x{crc_int:04X} -> {reply_crc_bytes.hex().upper()}")
+            except (ValueError, UnicodeDecodeError):
+                # 方法2: 作为原始字节处理（原有逻辑）
+                if len(crc_field) == field_len:
+                    reply_crc_bytes = crc_field
+                    self._emit_log(f"解析原始字节总 CRC: {reply_crc_bytes.hex().upper()}")
+            
+            if reply_crc_bytes is None:
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len * 2}位ASCII十六进制或{field_len}字节];", payload_str, frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
 

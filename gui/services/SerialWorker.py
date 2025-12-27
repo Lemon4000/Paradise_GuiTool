@@ -179,7 +179,13 @@ class SerialWorker(QObject):
                             break
                         if c == b';':
                             if cs_len:
-                                self.ser.read(cs_len)
+                                # 阻塞读取完整的cs_len字节（过滤回显的TX帧）
+                                bytes_to_read = cs_len
+                                while bytes_to_read > 0 and self._reading and self.ser:
+                                    chunk = self.ser.read(bytes_to_read)
+                                    if not chunk:
+                                        break
+                                    bytes_to_read -= len(chunk)
                             break
                     continue
 
@@ -196,6 +202,8 @@ class SerialWorker(QObject):
                 
                 if b == rx_start_byte:
                     payload = bytearray(b)
+                    target_payload_len = None
+                    
                     while self._reading and self.ser:
                         c = self.ser.read(1)
                         if not c:
@@ -206,92 +214,135 @@ class SerialWorker(QObject):
                         except Exception:
                             pass
                         payload += c
-                        if c == b';':
+
+                        # 如果是 #HEX:REPLY 开头的帧，采用固定长度解析
+                        if payload.startswith(b'#HEX:REPLY') and target_payload_len is None:
+                            target_payload_len = 13  # 固定长度：#HEX:REPLY(10) + CRC(2) + ;(1) = 13
+
+                        # 非REPLY帧：按分号结束
+                        if target_payload_len is None and c == b';':
                             cs = b''
                             if cs_len:
-                                cs = self.ser.read(cs_len)
-                                try:
-                                    self.sigRawRecv.emit(cs.hex())
-                                    self.sigAsciiRecv.emit(cs.decode('latin1'))
-                                except Exception:
-                                    pass
-
-                            # Frame complete, emit Break
+                                bytes_to_read = cs_len
+                                while bytes_to_read > 0 and self._reading and self.ser:
+                                    chunk = self.ser.read(bytes_to_read)
+                                    if not chunk:
+                                        break
+                                    cs += chunk
+                                    bytes_to_read -= len(chunk)
+                            
+                            # 发送信号
+                            try:
+                                self.sigRawRecv.emit(cs.hex())
+                                self.sigAsciiRecv.emit(cs.decode('latin1'))
+                            except Exception:
+                                pass
                             self.sigRecvBreak.emit()
-
+                            
                             frame = (pre if pre_len and recent == pre else b'') + bytes(payload) + cs
                             try:
                                 self.sigFrameRecv.emit(frame.hex())
                             except Exception:
                                 pass
-
-                            # 在透传模式下，跳过自动处理和回复
+                            
                             if self._passthrough_mode:
                                 break
-
-                            # self.sigAsciiRecv already emitted stream
+                            
+                            # 处理 #REPLY: 响应
                             pl = bytes(payload)
-                            is_reply = pl.startswith(b'#REPLY:') and pl.endswith(b';')
-                            if is_reply:
+                            if pl.startswith(b'#REPLY:') and pl.endswith(b';'):
                                 data_region = pl[len(b'#REPLY:'):-1]
                                 dr = data_region
-                                # support ascii hex like "6B A0"
                                 try:
                                     text = dr.decode('ascii')
                                     s = text.replace(' ', '').upper()
                                     if len(s) % 2 == 0 and all(ch in '0123456789ABCDEF' for ch in s):
                                         dr = bytes(int(s[i:i+2], 16) for i in range(0, len(s), 2))
                                 except Exception:
-                                    # 顶层保护：任何未捕获异常视为断开
-                                    try:
-                                        self.sigError.emit('串口读线程异常，已停止')
-                                        self.sigConnected.emit(False)
-                                    except Exception:
-                                        pass
+                                    pass
+                                
                                 calc_reply_cs = proto._checksum_bytes(pl, algo)
                                 reply_crc_hex = ' '.join(f'{b:02X}' for b in (cs or b''))
                                 if cs_len and cs != calc_reply_cs:
-                                    self.sigReplyMismatch.emit(f'回复帧CRC校验失败 (Exp:{calc_reply_cs.hex().upper()}, Got:{cs.hex().upper()})')
+                                    try:
+                                        self.sigReplyMismatch.emit(f'回复帧CRC校验失败 (Exp:{calc_reply_cs.hex().upper()}, Got:{cs.hex().upper()})')
+                                    except Exception:
+                                        pass
                                 else:
                                     sent_crc_hex = ' '.join(f'{b:02X}' for b in (dr or b''))
                                     if self._last_tx_crc and dr != self._last_tx_crc:
                                         msg = f'回复携带的上位机CRC不匹配 (Exp:{self._last_tx_crc.hex().upper()}, Got:{dr.hex().upper()})'
-                                        self.sigReplyMismatch.emit(msg)
+                                        try:
+                                            self.sigReplyMismatch.emit(msg)
+                                        except Exception:
+                                            pass
                                     else:
-                                        self.sigReplyOk.emit(sent_crc_hex, reply_crc_hex)
-                            parsed = None
+                                        try:
+                                            self.sigReplyOk.emit(sent_crc_hex, reply_crc_hex)
+                                        except Exception:
+                                            pass
+                            
+                            # 解析帧
                             try:
                                 parsed = proto.parse_frame(frame, cfg)
-                            except Exception:
-                                parsed = None
-                            if parsed:
-                                try:
-                                    self.sigReadDone.emit(parsed)
-                                except Exception:
-                                    pass
-                                # auto reply with received CRC and this frame CRC
-                                try:
-                                    tx_start = (cfg.get('TxStart','!') or '!')[0]
-                                    algo = cfg.get('Checksum','CRC16_MODBUS').upper()
-                                    pre_bytes = bytes.fromhex(cfg.get('Preamble','')) if cfg.get('Preamble','') else b''
-                                    recv_crc_hex = ' '.join([f'{b:02X}' for b in cs]) if cs_len else ''
-                                    payload_bytes = bytes([ord(tx_start)]) + b'REPLY:' + (cs if cs_len else b'') + b';'
-                                    reply_cs = proto._checksum_bytes(payload_bytes, algo)
-                                    reply_frame = pre_bytes + payload_bytes + reply_cs
-                                    self.sigFrameSent.emit(reply_frame.hex())
-                                    self.sigRawSend.emit(reply_frame.hex())
-                                    self.sigAsciiSend.emit(f"!REPLY:{recv_crc_hex};")
-                                    if self.ser:
-                                        self.ser.write(reply_frame)
-                                except Exception:
-                                    pass
-                            else:
-                                if not is_reply:
+                                if parsed:
+                                    try:
+                                        self.sigReadDone.emit(parsed)
+                                    except Exception:
+                                        pass
+                                    # 自动回复
+                                    try:
+                                        tx_start = (cfg.get('TxStart','!') or '!')[0]
+                                        algo = cfg.get('Checksum','CRC16_MODBUS').upper()
+                                        pre_bytes = bytes.fromhex(cfg.get('Preamble','')) if cfg.get('Preamble','') else b''
+                                        recv_crc_hex = ' '.join([f'{b:02X}' for b in cs]) if cs_len else ''
+                                        payload_bytes = bytes([ord(tx_start)]) + b'REPLY:' + (cs if cs_len else b'') + b';'
+                                        reply_cs = proto._checksum_bytes(payload_bytes, algo)
+                                        reply_frame = pre_bytes + payload_bytes + reply_cs
+                                        self.sigFrameSent.emit(reply_frame.hex())
+                                        self.sigRawSend.emit(reply_frame.hex())
+                                        self.sigAsciiSend.emit(f"!REPLY:{recv_crc_hex};")
+                                        if self.ser:
+                                            self.ser.write(reply_frame)
+                                    except Exception:
+                                        pass
+                                else:
                                     try:
                                         self.sigReadFailed.emit()
                                         self.sigError.emit('接收校验失败')
                                     except Exception:
                                         pass
+                            except Exception:
+                                pass
+                            break
+                        
+                        # REPLY帧：按固定长度收满payload后退出
+                        if target_payload_len is not None and len(payload) >= target_payload_len:
+                            cs = b''
+                            if cs_len:
+                                bytes_to_read = cs_len
+                                while bytes_to_read > 0 and self._reading and self.ser:
+                                    chunk = self.ser.read(bytes_to_read)
+                                    if not chunk:
+                                        break
+                                    cs += chunk
+                                    bytes_to_read -= len(chunk)
+                            
+                            try:
+                                self.sigRawRecv.emit(cs.hex())
+                                self.sigAsciiRecv.emit(cs.decode('latin1'))
+                            except Exception:
+                                pass
+                            self.sigRecvBreak.emit()
+                            
+                            frame = (pre if pre_len and recent == pre else b'') + bytes(payload) + cs
+                            try:
+                                self.sigFrameRecv.emit(frame.hex())
+                            except Exception:
+                                pass
+                            
+                            if self._passthrough_mode:
+                                break
                             break
         except Exception as e:
             try:
