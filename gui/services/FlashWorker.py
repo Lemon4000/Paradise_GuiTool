@@ -431,27 +431,32 @@ class FlashWorker(QObject):
     def _handle_program_response(self, frame: bytes):
         """处理编程响应: #HEX:REPLY[上一帧CRC];[CRC]"""
         try:
-            # 提取实际接收的CRC
+            # 提取负载与帧CRC
             recv_crc = self._get_frame_crc(frame)
             payload = self._extract_payload(frame)
 
-            # 计算期望的CRC
-            calc_crc = proto._checksum_bytes(payload, self.cfg.get('Checksum', 'CRC16_MODBUS'))
+            rx_start = (self.cfg.get('RxStart', '#') or '#')[0]
+            expected_prefix = f"{rx_start}HEX:REPLY"
+            algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
+            field_len = 2 if algo == 'CRC16_MODBUS' else (1 if algo == 'SUM8' else 0)
+            prefix_len = len(expected_prefix)
+            required_len = prefix_len + field_len + 1  # REPLY + CRC字段 + ';'
 
-            # 验证CRC
+            # 先做结构长度检查，避免截断帧被误判为CRC错误
+            if len(payload) < required_len:
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[{field_len}字节];", f"LEN={len(payload)} PAYLOAD={payload_str}", frame)
+                self._transition_to(FlashState.FAILED)
+                return
+
+            # 验证帧CRC（在长度满足后再验，避免截断引起的无谓重试）
+            calc_crc = proto._checksum_bytes(payload, self.cfg.get('Checksum', 'CRC16_MODBUS'))
             if recv_crc != calc_crc:
                 self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
 
             # 解析响应: #HEX:REPLY[上一帧CRC];[CRC]
-            rx_start = (self.cfg.get('RxStart', '#') or '#')[0]
-            
-            # 期望格式: #HEX:REPLY[hex_crc];
-            # 其中[hex_crc]是16进制数据，不是ASCII字符串
-            expected_prefix = f"{rx_start}HEX:REPLY"
-            
-            # 找到REPLY后的部分
             if not payload.startswith(expected_prefix.encode('ascii')):
                 self.timeout_timer.stop()  # 停止周期性定时器
                 payload_str = payload.decode('ascii', errors='ignore')
@@ -460,14 +465,6 @@ class FlashWorker(QObject):
                 return
 
             # 固定长度提取回复CRC字段，避免CRC包含 ';' 时被截断
-            prefix_len = len(expected_prefix)
-            algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
-            field_len = 2 if algo == 'CRC16_MODBUS' else (1 if algo == 'SUM8' else 0)
-            if len(payload) < prefix_len + field_len + 1:
-                payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{expected_prefix}[{field_len}字节];", payload_str, frame)
-                self._retry_or_fail(2000)
-                return
             reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
             # 校验紧随其后的是分号
             if payload[prefix_len + field_len:prefix_len + field_len + 1] != b';':
@@ -558,19 +555,32 @@ class FlashWorker(QObject):
         注意：设备返回的 [总CRC] 为原始二进制2字节，通常为小端序，不能按ASCII解析。
         """
         try:
-            # 提取实际接收的帧CRC并校验负载
+            # 提取实际接收的帧CRC与负载
             recv_crc = self._get_frame_crc(frame)
             payload = self._extract_payload(frame)
 
+            rx_start = (self.cfg.get('RxStart', '#') or '#')[0]
+            expected_prefix = f"{rx_start}HEX:REPLY".encode('ascii')
+            algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
+            field_len = 2 if algo == 'CRC16_MODBUS' else (1 if algo == 'SUM8' else 0)
+            prefix_len = len(expected_prefix)
+            required_len = prefix_len + field_len + 1
+
+            # 先做长度检查，避免截断帧被误判为CRC错误
+            if len(payload) < required_len:
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len}字节];", f"LEN={len(payload)} PAYLOAD={payload_str}", frame)
+                self._transition_to(FlashState.FAILED)
+                return
+
+            # 帧CRC校验（在长度满足后进行）
             calc_crc = proto._checksum_bytes(payload, self.cfg.get('Checksum', 'CRC16_MODBUS'))
             if recv_crc != calc_crc:
                 self._log_error("CRC_MISMATCH", calc_crc.hex().upper(), recv_crc.hex().upper(), frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 检查前缀并以字节方式提取 REPLY 后的 CRC 字段
-            rx_start = (self.cfg.get('RxStart', '#') or '#')[0]
-            expected_prefix = f"{rx_start}HEX:REPLY".encode('ascii')
+            # 检查前缀
             if not payload.startswith(expected_prefix):
                 payload_str = payload.decode('ascii', errors='ignore')
                 self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[hex];", payload_str, frame)
@@ -578,14 +588,6 @@ class FlashWorker(QObject):
                 return
 
             # 固定长度提取CRC字段（避免CRC字节等于 ';' 时被截断）
-            prefix_len = len(expected_prefix)
-            algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
-            field_len = 2 if algo == 'CRC16_MODBUS' else (1 if algo == 'SUM8' else 0)
-            if len(payload) < prefix_len + field_len + 1:
-                payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len}字节];", payload_str, frame)
-                self._retry_or_fail(2000, immediate=True)
-                return
             reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
             # 校验后续分号
             if payload[prefix_len + field_len:prefix_len + field_len + 1] != b';':
