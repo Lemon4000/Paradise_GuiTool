@@ -410,6 +410,13 @@ class MainWindow(QMainWindow):
             self.status.showMessage('连接失败或已断开，映射已刷新', 3000)
             # 清除烧录标签页的串口状态
             self.flash_tab.set_serial_port(None, None)
+            # 若正在烧录，立即中止并弹窗提示
+            try:
+                if getattr(self.flash_tab, 'is_flashing', False):
+                    self.flash_tab.on_abort_clicked()
+                    QMessageBox.critical(self, '错误', '串口已断开，烧录已中止')
+            except Exception:
+                pass
 
     def _onFrameSent(self, hexstr: str):
         # Check if this is a REPLY frame (hex for REPLY: is 5245504C593A)

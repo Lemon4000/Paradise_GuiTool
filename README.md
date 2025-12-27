@@ -16,6 +16,11 @@
   - 可设置默认波特率
   - 可删除自定义波特率
   
+- **日志输出控制**
+  - 烧录标签页新增“启用日志输出”复选框，实时开关日志
+  - 关闭时仍然接收并推进状态机，只是停止界面日志渲染
+  - 详见 [config/日志控制功能说明.md](config/%E6%97%A5%E5%BF%97%E6%8E%A7%E5%88%B6%E5%8A%9F%E8%83%BD%E8%AF%B4%E6%98%8E.md)
+  
 - **配置记忆**
   - 自动保存上次使用的波特率
   - 记忆最后使用的HEX文件路径
@@ -70,6 +75,8 @@ pip install -r requirements.txt
 
 # 运行程序
 python gui/main.py
+# 或（推荐）
+python -m gui.main
 ```
 
 ### 构建EXE
@@ -97,6 +104,34 @@ python -m PyInstaller gui/main.py -F --noconsole --icon ICON.png -n UsartGUI --a
 ### 用户配置 (config/user_config.json)
 自动生成和管理的用户偏好设置
 
+## 固件烧录协议要点
+
+- 烧录时开启透传模式：避免自动解析/自动回复干扰。
+  - 入口：见 [gui/views/FlashTab.py](gui/views/FlashTab.py#L493-L501)
+- 数据块发送：`!HEX:START[addr].SIZE[size],DATA[binary];[CRC]`
+  - `DATA` 后携带原始二进制数据，而非 ASCII HEX
+  - 帧 CRC 参与总 CRC 累加（按小端整数直接相加，取 16 位）
+- 编程回复：`#HEX:REPLY[CRC];[CRC]`
+  - `[CRC]` 为原始字节（`CRC16_MODBUS` 为 2 字节，`SUM8` 为 1 字节），不是 ASCII
+  - 固定长度提取 CRC 字段，允许 CRC 字节等于分号 `0x3B`，不会被截断
+  - 实现：见 [gui/services/FlashWorker.py](gui/services/FlashWorker.py#L432-L480)
+- 校验命令：`!HEX:ENDCRC[total_crc];[CRC]`
+  - `total_crc` 发送为 2 字节（当前实现为大端），设备回复 `#HEX:REPLY` 的总 CRC 为原始两字节
+  - 回复端序兼容：接受小端或大端两种形式，见 [gui/services/FlashWorker.py](gui/services/FlashWorker.py#L600-L647)
+
+## 异常与断开处理
+
+- 串口读线程异常/断开：立即发出错误并断开连接，停止读循环
+  - 实现：见 [gui/services/SerialWorker.py](gui/services/SerialWorker.py#L1-L260)
+- 主窗口收到断开：若正在烧录则立刻中止，并弹窗提示“串口已断开，烧录已中止”
+  - 实现：见 [gui/views/MainWindow.py](gui/views/MainWindow.py#L200-L280)
+
+## 构建脚本
+
+- PowerShell 构建：见 [scripts/build.ps1](scripts/build.ps1)
+  - 示例：`pwsh scripts/build.ps1 -Name UsartGUI -OneFile`
+  - 自动打包 `config` 与 `gui/resources` 到发行包
+
 ## 更新日志
 
 ### v1.0.0
@@ -106,6 +141,12 @@ python -m PyInstaller gui/main.py -F --noconsole --icon ICON.png -n UsartGUI --a
 - ? 波特率管理
 - ? 配置记忆
 - ? 串口自动检测
+
+### v1.1.0
+- 新增：烧录日志实时开关（复选框），默认值可在配置中设置
+- 修复：`#HEX:REPLY` 的 CRC 字段按固定长度解析，避免 CRC 包含分号时被截断
+- 优化：VERIFY 阶段按原始二进制处理并兼容端序，避免因大小端不一致误报
+- 增强：串口断开检测与中止烧录流程，防止误连其他串口继续烧录
 
 ## 许可证
 

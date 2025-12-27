@@ -459,19 +459,22 @@ class FlashWorker(QObject):
                 self._retry_or_fail(2000)
                 return
 
-            # 提取[hex_crc]部分: REPLY之后到;之前的内容
+            # 固定长度提取回复CRC字段，避免CRC包含 ';' 时被截断
             prefix_len = len(expected_prefix)
-            # 找到;的位置
-            semicolon_pos = payload.find(b';', prefix_len)
-            if semicolon_pos == -1:
-                self.timeout_timer.stop()  # 停止周期性定时器
+            algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
+            field_len = 2 if algo == 'CRC16_MODBUS' else (1 if algo == 'SUM8' else 0)
+            if len(payload) < prefix_len + field_len + 1:
                 payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{expected_prefix}[hex];", payload_str, frame)
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[{field_len}字节];", payload_str, frame)
                 self._retry_or_fail(2000)
                 return
-            
-            # 提取回复的CRC (16进制字节)
-            reply_crc_bytes = payload[prefix_len:semicolon_pos]
+            reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
+            # 校验紧随其后的是分号
+            if payload[prefix_len + field_len:prefix_len + field_len + 1] != b';':
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{expected_prefix}[{field_len}字节];", payload_str, frame)
+                self._retry_or_fail(2000)
+                return
 
             # 验证回复的CRC是否匹配上次发送的CRC
             if self.last_sent_crc:
@@ -574,16 +577,22 @@ class FlashWorker(QObject):
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # REPLY 后到分号 ';' 之前是原始2字节CRC
+            # 固定长度提取CRC字段（避免CRC字节等于 ';' 时被截断）
             prefix_len = len(expected_prefix)
-            semicolon_pos = payload.find(b';', prefix_len)
-            if semicolon_pos == -1:
+            algo = self.cfg.get('Checksum', 'CRC16_MODBUS').upper()
+            field_len = 2 if algo == 'CRC16_MODBUS' else (1 if algo == 'SUM8' else 0)
+            if len(payload) < prefix_len + field_len + 1:
                 payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[hex];", payload_str, frame)
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len}字节];", payload_str, frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
-
-            reply_crc_bytes = payload[prefix_len:semicolon_pos]
+            reply_crc_bytes = payload[prefix_len:prefix_len + field_len]
+            # 校验后续分号
+            if payload[prefix_len + field_len:prefix_len + field_len + 1] != b';':
+                payload_str = payload.decode('ascii', errors='ignore')
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len}字节];", payload_str, frame)
+                self._retry_or_fail(2000, immediate=True)
+                return
 
             # 期望的总CRC（接受设备返回小端/大端任一形式，以提高兼容性）
             expected_le = self.total_data_crc.to_bytes(2, byteorder='little')

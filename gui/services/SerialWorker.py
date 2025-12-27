@@ -143,8 +143,30 @@ class SerialWorker(QObject):
             recent = bytearray()
             
             while self._reading and self.ser:
-                b = self.ser.read(1)
+                try:
+                    b = self.ser.read(1)
+                except Exception as e:
+                    # 读异常通常意味着串口被拔掉或不可用
+                    try:
+                        self.sigError.emit(f"串口读取失败或已断开: {str(e)}")
+                    except Exception:
+                        pass
+                    self._reading = False
+                    try:
+                        if self.ser:
+                            self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+                    self.port = None
+                    try:
+                        self.sigConnected.emit(False)
+                    except Exception:
+                        pass
+                    break
+
                 if not b:
+                    # 超时无数据，继续等待（不视为断开）
                     continue
                 
                 # Filter echoed TX frames (starting with !)
@@ -220,7 +242,12 @@ class SerialWorker(QObject):
                                     if len(s) % 2 == 0 and all(ch in '0123456789ABCDEF' for ch in s):
                                         dr = bytes(int(s[i:i+2], 16) for i in range(0, len(s), 2))
                                 except Exception:
-                                    pass
+                                    # 顶层保护：任何未捕获异常视为断开
+                                    try:
+                                        self.sigError.emit('串口读线程异常，已停止')
+                                        self.sigConnected.emit(False)
+                                    except Exception:
+                                        pass
                                 calc_reply_cs = proto._checksum_bytes(pl, algo)
                                 reply_crc_hex = ' '.join(f'{b:02X}' for b in (cs or b''))
                                 if cs_len and cs != calc_reply_cs:
