@@ -24,7 +24,7 @@ import Usart_Para_FK as proto
 try:
     from version import __version__, __app_name__
 except ImportError:
-    __version__ = "1.0.0"
+    __version__ = "2.0.0"
     __app_name__ = "Paradise GuiTool"
 
 class MainWindow(QMainWindow):

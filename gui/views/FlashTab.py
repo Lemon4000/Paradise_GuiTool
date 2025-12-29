@@ -553,10 +553,33 @@ class FlashTab(QWidget):
             self.status_log_view.append("[系统] 日志输出已禁用")
     
     def on_log(self, message: str):
-        """状态日志消息"""
+        """状态日志消息，根据类型自动着色"""
         import time
         timestamp = time.strftime("%H:%M:%S")
-        self.status_log_view.append(f"[{timestamp}] {message}")
+        
+        # 根据消息内容判断日志类型并着色
+        color = "#CCCCCC"  # 默认浅灰
+        bold = ""
+        
+        if "[ERROR]" in message or "❌" in message or "失败" in message or "错误" in message or "超时" in message:
+            color = "#FF4444"  # 红色 - 错误
+            bold = "font-weight: bold;"
+        elif "✓" in message or "[成功]" in message or "成功" in message or "[SUCCESS]" in message:
+            color = "#00FF00"  # 绿色 - 成功
+            bold = "font-weight: bold;"
+        elif "[WARN]" in message or "警告" in message:
+            color = "#FFAA00"  # 橙色 - 警告
+        elif "[INFO]" in message or "信息" in message:
+            color = "#4488FF"  # 蓝色 - 信息
+        elif "[DEBUG]" in message or "调试" in message:
+            color = "#888888"  # 灰色 - 调试
+        elif "[首接]" in message or "[发送]" in message or "[累加" in message or "[完整]" in message or "[期望]" in message:
+            color = "#CCFF99"  # 浅绿 - 性能/调试信息
+        elif "期望" in message or "实际" in message or "CRC" in message:
+            color = "#FFCC99"  # 浅橙 - 校验信息
+        
+        html = f'<span style="color: {color}; {bold}">[{timestamp}] {message}</span>'
+        self.status_log_view.append(html)
 
     def on_frame_sent(self, hex_str: str):
         """发送帧"""
@@ -619,33 +642,33 @@ class FlashTab(QWidget):
         self._update_recv_display()
 
     def on_error_detail(self, error_type: str, expected: str, received: str):
-        """详细错误信息"""
+        """详细错误信息，按类型分别着色"""
         import time
         timestamp = time.strftime("%H:%M:%S")
 
         if error_type == "CRC_MISMATCH":
-            msg = f'<span style="color: red; font-weight: bold;">[{timestamp}] CRC校验失败!</span><br>'
-            msg += f'  期望: <span style="color: blue;">{expected}</span><br>'
-            msg += f'  实际: <span style="color: red;">{received}</span>'
+            msg = f'<span style="color: #FF4444; font-weight: bold;">[{timestamp}] ❌ CRC校验失败!</span><br>'
+            msg += f'  <span style="color: #CCCCCC;">期望: </span><span style="color: #00FF00;">{expected}</span><br>'
+            msg += f'  <span style="color: #CCCCCC;">实际: </span><span style="color: #FF4444;">{received}</span>'
             self.status_log_view.append(msg)
         elif error_type == "DATA_MISMATCH":
-            msg = f'<span style="color: orange; font-weight: bold;">[{timestamp}] 数据内容错误!</span><br>'
-            msg += f'  期望: <span style="color: blue;">{expected}</span><br>'
-            msg += f'  实际: <span style="color: red;">{received}</span>'
+            msg = f'<span style="color: #FFAA00; font-weight: bold;">[{timestamp}] ⚠ 数据内容错误!</span><br>'
+            msg += f'  <span style="color: #CCCCCC;">期望: </span><span style="color: #00FF00;">{expected}</span><br>'
+            msg += f'  <span style="color: #CCCCCC;">实际: </span><span style="color: #FF4444;">{received}</span>'
             self.status_log_view.append(msg)
         elif error_type == "FORMAT_ERROR":
-            msg = f'<span style="color: red; font-weight: bold;">[{timestamp}] 格式错误!</span><br>'
-            msg += f'  期望格式: <span style="color: blue;">{expected}</span><br>'
-            msg += f'  接收内容: <span style="color: red;">{received}</span>'
+            msg = f'<span style="color: #FF4444; font-weight: bold;">[{timestamp}] ❌ 格式错误!</span><br>'
+            msg += f'  <span style="color: #CCCCCC;">期望格式: </span><span style="color: #00FF00;">{expected}</span><br>'
+            msg += f'  <span style="color: #CCCCCC;">接收内容: </span><span style="color: #FF4444;">{received}</span>'
             self.status_log_view.append(msg)
 
     def on_verify_ok(self, expected: str, received: str):
         """校验成功"""
         import time
         timestamp = time.strftime("%H:%M:%S")
-        msg = f'<span style="color: green; font-weight: bold;">[{timestamp}] 校验成功!</span><br>'
-        msg += f'  期望: <span style="color: green;">{expected}</span><br>'
-        msg += f'  实际: <span style="color: green;">{received}</span>'
+        msg = f'<span style="color: #00FF00; font-weight: bold;">[{timestamp}] ✓ 校验成功!</span><br>'
+        msg += f'  <span style="color: #CCCCCC;">期望: </span><span style="color: #00FF00;">{expected}</span><br>'
+        msg += f'  <span style="color: #CCCCCC;">实际: </span><span style="color: #00FF00;">{received}</span>'
         self.status_log_view.append(msg)
 
     def on_next_step_clicked(self):

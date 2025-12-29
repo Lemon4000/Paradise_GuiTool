@@ -71,10 +71,10 @@ class FlashWorker(QObject):
         self.err_data = 0  # 数据错误计数
         self.err_total = 0  # 总错误计数
         self.flash_start_ts = None  # 烧录开始时间戳
-        self.init_retry_delay = 300  # 初始化重试延迟(ms)，默认300ms以避免设备被洪泛
+        self.init_retry_delay = 50  # 初始化重试延迟(ms)，默认50ms以避免设备被洪泛
         self.init_start_time = None  # 初始化开始时间（用于计算总时间）
         self.init_timeout = 5000  # 初始化总超时时间(ms)
-        self.program_retry_delay = 50  # 编程数据重试延迟(ms)，默认50ms
+        self.program_retry_delay = 1000  # 编程数据重试延迟(ms)，默认1000ms
         self.program_start_time = None  # 当前数据块发送开始时间
         self.program_timeout = 2000  # 单个数据块总超时时间(ms)
         self.program_last_send_ts = None  # 记录每次发送PROGRAM帧的时间，用于统计往返耗时（开始→完整回应）
@@ -339,7 +339,7 @@ class FlashWorker(QObject):
 
             self.state = FlashState.WAIT_ERASE
             if not self.debug_mode:
-                self.timeout_timer.start(10000)  # 10秒超时
+                self.timeout_timer.start(1000)  # 1秒超时
             self.sigProgress.emit(10, "等待擦除完成...")
 
             self._emit_expected(f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:ERASE;")
@@ -681,41 +681,19 @@ class FlashWorker(QObject):
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 尝试解析 ASCII 十六进制格式（如 "A950"）或原始字节格式
-            # 查找分号位置
-            semicolon_pos = payload.find(b';', prefix_len)
-            if semicolon_pos == -1:
+            # 固定格式：#HEX:REPLY + 2字节CRC + ';' + 帧CRC
+            crc_field = payload[prefix_len:prefix_len + field_len]
+            semicolon_pos = prefix_len + field_len
+            if payload[semicolon_pos:semicolon_pos + 1] != b';':
                 payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[CRC];", payload_str, frame)
-                self._retry_or_fail(2000, immediate=True)
-                return
-            
-            # 提取 REPLY 后到分号之间的内容
-            crc_field = payload[prefix_len:semicolon_pos]
-            reply_crc_bytes = None
-            
-            # 方法1: 尝试作为 ASCII 十六进制字符串解析（如 "A950"）
-            try:
-                crc_str = crc_field.decode('ascii')
-                # 期望 2*field_len 个字符（如 CRC16 是 4 个字符）
-                if len(crc_str) in [field_len * 2, field_len]:  # 兼容完整或简化格式
-                    crc_int = int(crc_str, 16)
-                    # 先按大端存储（因为 ENDCRC 发送的是大端）
-                    reply_crc_bytes = crc_int.to_bytes(field_len, byteorder='big')
-                    self._emit_log(f"解析 ASCII 十六进制总 CRC: '{crc_str}' -> 0x{crc_int:04X} -> {reply_crc_bytes.hex().upper()}")
-            except (ValueError, UnicodeDecodeError):
-                # 方法2: 作为原始字节处理（原有逻辑）
-                if len(crc_field) == field_len:
-                    reply_crc_bytes = crc_field
-                    self._emit_log(f"解析原始字节总 CRC: {reply_crc_bytes.hex().upper()}")
-            
-            if reply_crc_bytes is None:
-                payload_str = payload.decode('ascii', errors='ignore')
-                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[{field_len * 2}位ASCII十六进制或{field_len}字节];", payload_str, frame)
+                self._log_error("FORMAT_ERROR", f"{(self.cfg.get('RxStart', '#') or '#')[0]}HEX:REPLY[2字节];", payload_str, frame)
                 self._retry_or_fail(2000, immediate=True)
                 return
 
-            # 期望的总CRC（接受设备返回小端/大端任一形式，以提高兼容性）
+            reply_crc_bytes = crc_field
+            self._emit_log(f"解析 VERIFY 回复: 总CRC={reply_crc_bytes.hex().upper()}")
+
+            # 期望的总CRC（接受设备返回小端/大端任一形式）
             expected_le = self.total_data_crc.to_bytes(2, byteorder='little')
             expected_be = self.total_data_crc.to_bytes(2, byteorder='big')
 
@@ -888,7 +866,7 @@ class FlashWorker(QObject):
             self.consecutive_errors += 1
             max_retries = self.max_retries
             current_retries = self.retry_count
-            retry_delay = 1000  # 其他阶段延迟1000ms
+            retry_delay = 3000  # 其他阶段延迟3000ms
             
             # 检查连续错误是否过多（仅非VERIFY阶段）
             if self.consecutive_errors >= self.max_consecutive_errors:
