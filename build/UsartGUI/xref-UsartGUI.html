@@ -172,6 +172,8 @@ imports:
  &#8226;   <a href="#re._constants">re._constants</a>
  &#8226;   <a href="#re._parser">re._parser</a>
  &#8226;   <a href="#reprlib">reprlib</a>
+ &#8226;   <a href="#serial.tools.list_ports">serial.tools.list_ports</a>
+ &#8226;   <a href="#serial.tools.list_ports_windows">serial.tools.list_ports_windows</a>
  &#8226;   <a href="#sre_compile">sre_compile</a>
  &#8226;   <a href="#sre_constants">sre_constants</a>
  &#8226;   <a href="#sre_parse">sre_parse</a>
@@ -348,6 +350,7 @@ imported by:
  &#8226;   <a href="#gui.models.ParamTableModel">gui.models.ParamTableModel</a>
  &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
  &#8226;   <a href="#gui.services.SerialWorker">gui.services.SerialWorker</a>
+ &#8226;   <a href="#gui.views.BaudRateManagerDialog">gui.views.BaudRateManagerDialog</a>
  &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
  &#8226;   <a href="#main.py">main.py</a>
@@ -375,6 +378,7 @@ imports:
 imported by:
     <a href="#PySide6.QtGui">PySide6.QtGui</a>
  &#8226;   <a href="#PySide6.QtWidgets">PySide6.QtWidgets</a>
+ &#8226;   <a href="#gui.views.BaudRateManagerDialog">gui.views.BaudRateManagerDialog</a>
  &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
 
@@ -425,6 +429,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#PySide6.QtWidgets">PySide6.QtWidgets</a>
+ &#8226;   <a href="#gui.views.BaudRateManagerDialog">gui.views.BaudRateManagerDialog</a>
  &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
  &#8226;   <a href="#main.py">main.py</a>
@@ -484,7 +489,8 @@ imported by:
   <a target="code" href="///C:/Users/Lemon/Documents/%E7%BC%96%E7%A8%8B%E5%8D%A1%E4%B8%8A%E4%BD%8D%E6%9C%BA/Usart_Para_FK.py" type="text/plain"><tt>Usart_Para_FK</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
-    <a href="#csv">csv</a>
+    <a href="#config.config">config.config</a>
+ &#8226;   <a href="#csv">csv</a>
  &#8226;   <a href="#openpyxl">openpyxl</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#serial">serial</a>
@@ -2402,6 +2408,37 @@ imports:
   <div class="import">
 imported by:
     <a href="#concurrent.interpreters">concurrent.interpreters</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="config"></a>
+  <a target="code" href="-" type="text/plain"><tt>config</tt></a>
+<span class="moduletype">NamespacePackage</span>  <div class="import">
+imported by:
+    <a href="#config.config">config.config</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="config.config"></a>
+  <a target="code" href="///C:/Users/Lemon/Documents/%E7%BC%96%E7%A8%8B%E5%8D%A1%E4%B8%8A%E4%BD%8D%E6%9C%BA/config/config.py" type="text/plain"><tt>config.config</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#config">config</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#Usart_Para_FK">Usart_Para_FK</a>
+ &#8226;   <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
+ &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
+ &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
+ &#8226;   <a href="#hex_parser">hex_parser</a>
 
   </div>
 
@@ -6090,8 +6127,30 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
+    <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
+ &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
  &#8226;   <a href="#gui.services.SerialWorker">gui.services.SerialWorker</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="gui.services.ConfigManager"></a>
+  <a target="code" href="///C:/Users/Lemon/Documents/%E7%BC%96%E7%A8%8B%E5%8D%A1%E4%B8%8A%E4%BD%8D%E6%9C%BA/gui/services/ConfigManager.py" type="text/plain"><tt>gui.services.ConfigManager</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#config.config">config.config</a>
+ &#8226;   <a href="#gui.services">gui.services</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
 
   </div>
 
@@ -6104,10 +6163,14 @@ imported by:
 imports:
     <a href="#PySide6.QtCore">PySide6.QtCore</a>
  &#8226;   <a href="#Usart_Para_FK">Usart_Para_FK</a>
+ &#8226;   <a href="#config.config">config.config</a>
  &#8226;   <a href="#enum">enum</a>
  &#8226;   <a href="#gui.services">gui.services</a>
  &#8226;   <a href="#hex_parser">hex_parser</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#sys">sys</a>
  &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#typing">typing</a>
 
   </div>
   <div class="import">
@@ -6147,8 +6210,28 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
+    <a href="#gui.views.BaudRateManagerDialog">gui.views.BaudRateManagerDialog</a>
+ &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="gui.views.BaudRateManagerDialog"></a>
+  <a target="code" href="///C:/Users/Lemon/Documents/%E7%BC%96%E7%A8%8B%E5%8D%A1%E4%B8%8A%E4%BD%8D%E6%9C%BA/gui/views/BaudRateManagerDialog.py" type="text/plain"><tt>gui.views.BaudRateManagerDialog</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#PySide6.QtCore">PySide6.QtCore</a>
+ &#8226;   <a href="#PySide6.QtGui">PySide6.QtGui</a>
+ &#8226;   <a href="#PySide6.QtWidgets">PySide6.QtWidgets</a>
+ &#8226;   <a href="#gui.views">gui.views</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
 
   </div>
 
@@ -6162,10 +6245,12 @@ imports:
     <a href="#PySide6.QtCore">PySide6.QtCore</a>
  &#8226;   <a href="#PySide6.QtGui">PySide6.QtGui</a>
  &#8226;   <a href="#PySide6.QtWidgets">PySide6.QtWidgets</a>
+ &#8226;   <a href="#config.config">config.config</a>
  &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
  &#8226;   <a href="#gui.views">gui.views</a>
  &#8226;   <a href="#hex_parser">hex_parser</a>
  &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#sys">sys</a>
  &#8226;   <a href="#time">time</a>
 
   </div>
@@ -6187,12 +6272,15 @@ imports:
  &#8226;   <a href="#PySide6.QtWidgets">PySide6.QtWidgets</a>
  &#8226;   <a href="#Usart_Para_FK">Usart_Para_FK</a>
  &#8226;   <a href="#gui.models.ParamTableModel">gui.models.ParamTableModel</a>
+ &#8226;   <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
  &#8226;   <a href="#gui.services.SerialWorker">gui.services.SerialWorker</a>
  &#8226;   <a href="#gui.views">gui.views</a>
+ &#8226;   <a href="#gui.views.BaudRateManagerDialog">gui.views.BaudRateManagerDialog</a>
  &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#serial.tools.list_ports">serial.tools.list_ports</a>
  &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#version">version</a>
 
   </div>
   <div class="import">
@@ -6280,7 +6368,10 @@ imported by:
   <a target="code" href="///C:/Users/Lemon/Documents/%E7%BC%96%E7%A8%8B%E5%8D%A1%E4%B8%8A%E4%BD%8D%E6%9C%BA/hex_parser.py" type="text/plain"><tt>hex_parser</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
-    <a href="#struct">struct</a>
+    <a href="#config.config">config.config</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#struct">struct</a>
+ &#8226;   <a href="#sys">sys</a>
  &#8226;   <a href="#typing">typing</a>
 
   </div>
@@ -7092,7 +7183,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#importlib.metadata">importlib.metadata</a>
+    <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
+ &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#json.decoder">json.decoder</a>
  &#8226;   <a href="#json.encoder">json.encoder</a>
  &#8226;   <a href="#json.scanner">json.scanner</a>
@@ -8342,9 +8434,12 @@ imported by:
  &#8226;   <a href="#getopt">getopt</a>
  &#8226;   <a href="#gettext">gettext</a>
  &#8226;   <a href="#glob">glob</a>
+ &#8226;   <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
+ &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
  &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
  &#8226;   <a href="#gzip">gzip</a>
+ &#8226;   <a href="#hex_parser">hex_parser</a>
  &#8226;   <a href="#http.cookiejar">http.cookiejar</a>
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.metadata._meta">importlib.metadata._meta</a>
@@ -9229,6 +9324,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
+ &#8226;   <a href="#main.py">main.py</a>
 
   </div>
 
@@ -9339,7 +9435,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#serial.tools.list_ports">serial.tools.list_ports</a>
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#serial.tools.list_ports">serial.tools.list_ports</a>
 
   </div>
 
@@ -9810,8 +9907,12 @@ imported by:
  &#8226;   <a href="#getopt">getopt</a>
  &#8226;   <a href="#gettext">gettext</a>
  &#8226;   <a href="#glob">glob</a>
+ &#8226;   <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
+ &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
+ &#8226;   <a href="#gui.views.FlashTab">gui.views.FlashTab</a>
  &#8226;   <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
  &#8226;   <a href="#gzip">gzip</a>
+ &#8226;   <a href="#hex_parser">hex_parser</a>
  &#8226;   <a href="#http.client">http.client</a>
  &#8226;   <a href="#importlib">importlib</a>
  &#8226;   <a href="#importlib._bootstrap_external">importlib._bootstrap_external</a>
@@ -10279,6 +10380,8 @@ imported by:
  &#8226;   <a href="#copyreg">copyreg</a>
  &#8226;   <a href="#dataclasses">dataclasses</a>
  &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#gui.services.ConfigManager">gui.services.ConfigManager</a>
+ &#8226;   <a href="#gui.services.FlashWorker">gui.services.FlashWorker</a>
  &#8226;   <a href="#hex_parser">hex_parser</a>
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.metadata._meta">importlib.metadata._meta</a>
@@ -10427,6 +10530,17 @@ imports:
 imported by:
     <a href="#urllib.error">urllib.error</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="version"></a>
+  <a target="code" href="///C:/Users/Lemon/Documents/%E7%BC%96%E7%A8%8B%E5%8D%A1%E4%B8%8A%E4%BD%8D%E6%9C%BA/version.py" type="text/plain"><tt>version</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imported by:
+    <a href="#gui.views.MainWindow">gui.views.MainWindow</a>
 
   </div>
 
