@@ -148,6 +148,8 @@ python -m PyInstaller gui/main.py -F --noconsole --icon ICON.png -n UsartGUI --a
 - 优化：VERIFY 阶段按原始二进制处理并兼容端序，避免因大小端不一致误报
 - 增强：串口断开检测与中止烧录流程，防止误连其他串口继续烧录
 
+### v2.0.0
+- 基本完成烧录任务
 ## 许可证
 
 MIT License

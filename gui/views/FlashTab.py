@@ -240,9 +240,9 @@ class FlashTab(QWidget):
         self.spin_init_retry = QSpinBox()
         self.spin_init_retry.setMinimum(10)
         self.spin_init_retry.setMaximum(5000)
-        self.spin_init_retry.setValue(50)
+        self.spin_init_retry.setValue(300)
         self.spin_init_retry.setSingleStep(10)
-        self.spin_init_retry.setToolTip("调整初始化命令的重试延迟时间（毫秒），默认50ms")
+        self.spin_init_retry.setToolTip("调整初始化命令的重试延迟时间（毫秒），默认300ms，建议≥200ms以避免设备洪泛")
         init_retry_layout.addWidget(self.spin_init_retry)
         btn_layout.addLayout(init_retry_layout)
         

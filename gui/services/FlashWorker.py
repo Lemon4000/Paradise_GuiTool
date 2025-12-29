@@ -71,12 +71,18 @@ class FlashWorker(QObject):
         self.err_data = 0  # 数据错误计数
         self.err_total = 0  # 总错误计数
         self.flash_start_ts = None  # 烧录开始时间戳
-        self.init_retry_delay = 50  # 初始化重试延迟(ms)，默认50ms
+        self.init_retry_delay = 300  # 初始化重试延迟(ms)，默认300ms以避免设备被洪泛
         self.init_start_time = None  # 初始化开始时间（用于计算总时间）
         self.init_timeout = 5000  # 初始化总超时时间(ms)
         self.program_retry_delay = 50  # 编程数据重试延迟(ms)，默认50ms
         self.program_start_time = None  # 当前数据块发送开始时间
         self.program_timeout = 2000  # 单个数据块总超时时间(ms)
+        self.program_last_send_ts = None  # 记录每次发送PROGRAM帧的时间，用于统计往返耗时（开始→完整回应）
+        self.program_send_start_ts = None  # 本块开始发送的时间（write调用前）
+        self.program_send_done_ts = None   # 本块发送完成的时间（write返回后）
+        self.program_first_recv_ts = None  # 本块首次接收时间（收到第一字节）
+        self.program_first_recv_logged = False  # 是否已记录首次接收，防止重复
+        self.program_frame_complete_ts = None  # 完整回应帧接收完成时间（_handle_program_response入口）
         self.logging_enabled_callback = None  # 日志启用状态回调函数
 
         # 超时定时器
@@ -169,6 +175,23 @@ class FlashWorker(QObject):
         try:
             # 发出接收信号
             self.sigFrameRecv.emit(frame.hex())
+
+            # PROGRAM阶段：记录“发送完成→首次接收”的耗时（仅记录一次）
+            try:
+                if (
+                    self.state == FlashState.WAIT_PROGRAM
+                    and not self.program_first_recv_logged
+                    and self.program_send_done_ts is not None
+                ):
+                    self.program_first_recv_ts = time.time()
+                    first_gap_ms = (self.program_first_recv_ts - self.program_send_done_ts) * 1000
+                    write_to_send_ms = (self.program_send_done_ts - self.program_send_start_ts) * 1000
+                    self.program_first_recv_logged = True
+                    self._emit_log(
+                        f"[首接] 块{self.current_block_index + 1} 延迟{first_gap_ms:.1f}ms (写完成→首字节) [分解: 写入{write_to_send_ms:.1f}ms + 等待{first_gap_ms:.1f}ms]"
+                    )
+            except Exception:
+                pass
 
             # 调试模式下只记录，不自动推进，等待手动“下一步”
             if self.debug_mode:
@@ -406,7 +429,21 @@ class FlashWorker(QObject):
             payload = header + data + b';'
             frame = self._build_frame(payload)
 
-            self.ser.write(frame)
+            # 记录发送完整时序（开始→写完成→首字节→完整回应）
+            self.program_first_recv_logged = False
+            self.program_first_recv_ts = None
+            self.program_frame_complete_ts = None
+            self.program_send_start_ts = time.time()
+            self.program_last_send_ts = self.program_send_start_ts  # 用于RTT统计（开始→完整回应）
+            bytes_written = self.ser.write(frame)
+            self.program_send_done_ts = time.time()
+            try:
+                send_elapsed_ms = (self.program_send_done_ts - self.program_send_start_ts) * 1000
+                self._emit_log(
+                    f"[发送] 块{self.current_block_index + 1} 耗时{send_elapsed_ms:.1f}ms (len={len(frame)}B, 返回={bytes_written}B)"
+                )
+            except Exception:
+                pass
             self.sigFrameSent.emit(frame.hex())
             self.last_sent_crc = self._get_frame_crc(frame)
 
@@ -436,6 +473,26 @@ class FlashWorker(QObject):
     def _handle_program_response(self, frame: bytes):
         """处理编程响应: #HEX:REPLY[上一帧CRC];[CRC]"""
         try:
+            # 统计完整时间链路（从发送开始→完整回应）
+            try:
+                frame_complete_time = time.time()
+                if self.program_last_send_ts is not None:
+                    # 完整往返时间
+                    rtt_total_ms = (frame_complete_time - self.program_last_send_ts) * 1000
+                    # 发送耗时
+                    send_ms = (self.program_send_done_ts - self.program_send_start_ts) * 1000 if self.program_send_done_ts else 0
+                    # 等待首字节耗时
+                    wait_first_ms = (self.program_first_recv_ts - self.program_send_done_ts) * 1000 if self.program_first_recv_ts else 0
+                    # 接收完整帧耗时
+                    recv_complete_ms = (frame_complete_time - self.program_first_recv_ts) * 1000 if self.program_first_recv_ts else 0
+                    
+                    self._emit_log(
+                        f"[完整] 块{self.current_block_index + 1} 总{rtt_total_ms:.0f}ms = 写{send_ms:.0f}ms + 等待首字节{wait_first_ms:.0f}ms + 接收帧{recv_complete_ms:.0f}ms"
+                    )
+                    self.program_frame_complete_ts = frame_complete_time
+            except Exception:
+                pass
+
             # 提取负载与帧CRC
             recv_crc = self._get_frame_crc(frame)
             payload = self._extract_payload(frame)
@@ -516,7 +573,6 @@ class FlashWorker(QObject):
                     self._emit_log(f"❌ 上一帧CRC不匹配:")
                     self._emit_log(f"  发送帧CRC: {sent_crc_hex} = 0x{sent_crc_int:04X}(小端)")
                     self._emit_log(f"  下位机回复: {reply_crc_hex} = 0x{reply_crc_int:04X}(小端)")
-                    self._emit_log(f"  本帧CRC: {frame_crc_bytes.hex().upper()}")
                     self._log_error("DATA_MISMATCH", sent_crc_hex, reply_crc_hex, frame)
                     self._retry_or_fail(2000)
                     return
@@ -783,16 +839,12 @@ class FlashWorker(QObject):
                 return
             
             retry_delay = self.init_retry_delay
-            if immediate:
-                self._emit_log(f"初始化重试，立即重发 (已用时:{elapsed_ms:.0f}ms)")
+            # 为避免设备在初始化阶段被短周期洪泛，统一采用延迟重发，不再立即重发
+            self._emit_log(f"初始化重试，延迟{retry_delay}ms... (已用时:{elapsed_ms:.0f}ms)")
+            def retry_and_restart():
                 self._send_init_command(is_retry=True)
-                self.timeout_timer.start(retry_delay)  # 重启周期性定时器
-            else:
-                self._emit_log(f"初始化重试，延迟{retry_delay}ms... (已用时:{elapsed_ms:.0f}ms)")
-                def retry_and_restart():
-                    self._send_init_command(is_retry=True)
-                    self.timeout_timer.start(retry_delay)
-                QTimer.singleShot(retry_delay, retry_and_restart)
+                self.timeout_timer.start(retry_delay)
+            QTimer.singleShot(retry_delay, retry_and_restart)
             return
         
         # PROGRAM阶段：使用时间控制而非次数控制
