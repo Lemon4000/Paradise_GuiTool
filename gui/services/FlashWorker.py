@@ -83,6 +83,7 @@ class FlashWorker(QObject):
         self.program_first_recv_ts = None  # 本块首次接收时间（收到第一字节）
         self.program_first_recv_logged = False  # 是否已记录首次接收，防止重复
         self.program_frame_complete_ts = None  # 完整回应帧接收完成时间（_handle_program_response入口）
+        self.prev_block_done_ts = None  # 上一块完成时间，用于观测块间间隔
         self.logging_enabled_callback = None  # 日志启用状态回调函数
 
         # 超时定时器
@@ -398,6 +399,11 @@ class FlashWorker(QObject):
                 self._transition_to(FlashState.VERIFY)
                 return
 
+            # 记录与上一块完成的间隔，便于定位延迟来源
+            if self.prev_block_done_ts is not None:
+                gap_ms = (time.time() - self.prev_block_done_ts) * 1000
+                self._emit_log(f"[间隔] 上一块完成→本块发送间隔 {gap_ms:.1f}ms")
+
             # 首次发送：记录开始时间
             if not is_retry:
                 self.program_start_time = time.time()
@@ -410,7 +416,11 @@ class FlashWorker(QObject):
                     return
 
             # 获取当前数据块
+            extract_start = time.perf_counter()
             address, data = self.data_blocks[self.current_block_index]
+            extract_ms = (time.perf_counter() - extract_start) * 1000
+            if not is_retry:  # 只在首次发送时记录，避免重试时刷屏
+                self._emit_log(f"[取块] 块{self.current_block_index + 1} 提取数据耗时 {extract_ms:.3f}ms")
             # 注意：不要在发送阶段累加数据块CRC，避免重试导致重复累加
             # 改为在收到该块成功回复后再累加（见 _handle_program_response）
 
@@ -473,6 +483,7 @@ class FlashWorker(QObject):
     def _handle_program_response(self, frame: bytes):
         """处理编程响应: #HEX:REPLY[上一帧CRC];[CRC]"""
         try:
+            parse_start = time.time()
             # 统计完整时间链路（从发送开始→完整回应）
             try:
                 frame_complete_time = time.time()
@@ -596,8 +607,13 @@ class FlashWorker(QObject):
             self.timeout_timer.stop()
             self.consecutive_errors = 0  # 重置连续错误计数
 
+            # 记录解析耗时
+            parse_ms = (time.time() - parse_start) * 1000
+            self._emit_log(f"[解析耗时] 块{self.current_block_index + 1} 处理耗时 {parse_ms:.2f}ms")
+
             # 继续下一个数据块
             self.current_block_index += 1
+            self.prev_block_done_ts = time.time()
             self._transition_to(FlashState.PROGRAM)
 
         except Exception as e:
@@ -837,9 +853,9 @@ class FlashWorker(QObject):
                     self._emit_log(f"重试次数超限，停止烧录")
                     self._transition_to(FlashState.FAILED)
                     return
-                # 常规重试：延迟后重新发送当前块
-                self._emit_log(f"延迟1000ms后重试数据块{self.current_block_index + 1}...")
-                QTimer.singleShot(1000, lambda: self._send_program_data(is_retry=False))  # 重置时间
+                # 常规重试：延迟后重新发送当前块（使用配置化的program重试延迟）
+                self._emit_log(f"延迟{self.program_retry_delay}ms后重试数据块{self.current_block_index + 1}...")
+                QTimer.singleShot(self.program_retry_delay, lambda: self._send_program_data(is_retry=False))  # 重置时间
                 return
             
             retry_delay = self.program_retry_delay

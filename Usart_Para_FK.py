@@ -222,7 +222,14 @@ def _open_port(cfg: Dict[str, str], port: str):
         par = serial.PARITY_ODD
     else:
         par = serial.PARITY_NONE
-    ser = serial.Serial(port=port, baudrate=baud, bytesize=serial.EIGHTBITS, parity=par, stopbits=serial.STOPBITS_TWO if stop == 2 else serial.STOPBITS_ONE, timeout=timeout_ms/1000.0)
+    ser = serial.Serial(port=port, baudrate=baud, bytesize=serial.EIGHTBITS, parity=par, stopbits=serial.STOPBITS_TWO if stop == 2 else serial.STOPBITS_ONE, timeout=timeout_ms/1000.0, write_timeout=0)
+    
+    # 优化 USB 延迟：减小缓冲区，降低批量传输延迟
+    try:
+        ser.set_buffer_size(rx_size=4096, tx_size=4096)
+    except (AttributeError, NotImplementedError):
+        pass  # 部分平台不支持
+    
     return ser
 
 def read_group(port: str, group: str, cfg: Dict[str, str] | None = None) -> Dict[str, float]:
