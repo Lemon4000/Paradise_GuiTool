@@ -143,7 +143,17 @@ class MainWindow(QMainWindow):
         self.logDock = QDockWidget('通信日志', self)
         self.logView = QPlainTextEdit()
         self.logView.setReadOnly(True)
-        self.logDock.setWidget(self.logView)
+        self.logView.setMaximumBlockCount(1000)  # 限制最多保留1000行日志，防止内存溢出
+        logWrap = QWidget()
+        logLay = QVBoxLayout(logWrap)
+        logCtl = QHBoxLayout()
+        btnLogClear = QPushButton('清空')
+        btnLogClear.clicked.connect(lambda: self._clearAllLogs())
+        logCtl.addWidget(QLabel('通信日志:'))
+        logCtl.addWidget(btnLogClear)
+        logLay.addLayout(logCtl)
+        logLay.addWidget(self.logView)
+        self.logDock.setWidget(logWrap)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.logDock)
 
         self.recvDock = QDockWidget('接收数据', self)
@@ -194,6 +204,7 @@ class MainWindow(QMainWindow):
         self.sendAsciiBuf = []
         self.recvToggle = False
         self.sendToggle = False
+        self.max_log_items = 2000  # 每个缓冲区最多保持2000条HTML项，防止内存溢出
         
         # 串口自动刷新定时器
         self.port_refresh_timer = QTimer()
@@ -435,23 +446,52 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _trim_buffer(self, buf: list, max_size: int = 2000):
+        """
+        限制缓冲区大小，移除最旧的条目
+        """
+        if len(buf) > max_size:
+            # 保持最近的 max_size 条
+            del buf[0:len(buf) - max_size]
+
+    def _clearAllLogs(self):
+        """清空所有日志缓冲区和视图"""
+        self.logView.clear()
+        self.recvView.clear()
+        self.sendView.clear()
+        self.recvHexBuf.clear()
+        self.recvAsciiBuf.clear()
+        self.sendHexBuf.clear()
+        self.sendAsciiBuf.clear()
+        self.status.showMessage('日志已清空', 2000)
+
     def _onRawRecv(self, hexstr: str):
+        # 烧录时跳过实时日志显示以提高性能
+        if getattr(self.flash_tab, 'is_flashing', False):
+            return
+        
         # Format: [RX] HEX...
         spaced = hexstr.upper() + ' '
         bg_color = '#C1FFC1' if self.recvToggle else '#F0FFF0' # Alternating Green
         html = f'<span style="background-color:{bg_color}; color:black;">{spaced}</span>'
         self.recvHexBuf.append(html)
+        self._trim_buffer(self.recvHexBuf, self.max_log_items)
         if self.recvFormat.currentText() == 'HEX':
             self.recvView.moveCursor(QTextCursor.MoveOperation.End)
             self.recvView.insertHtml(html)
 
     def _onAsciiRecv(self, s: str):
+        # 烧录时跳过实时日志显示以提高性能
+        if getattr(self.flash_tab, 'is_flashing', False):
+            return
+        
         # Escape HTML special chars if needed
         safe_s = s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br>')
         bg_color = '#C1FFC1' if self.recvToggle else '#F0FFF0'
         html = f'<span style="background-color:{bg_color}; color:black;">{safe_s}</span>'
         self.recvToggle = not self.recvToggle
         self.recvAsciiBuf.append(html)
+        self._trim_buffer(self.recvAsciiBuf, self.max_log_items)
         if self.recvFormat.currentText() == 'ASCII':
             self.recvView.moveCursor(QTextCursor.MoveOperation.End)
             self.recvView.insertHtml(html)
@@ -467,20 +507,30 @@ class MainWindow(QMainWindow):
         self.status.showMessage('写入成功' if ok else '写入失败', 3000)
 
     def _onRawSend(self, hexstr: str):
+        # 烧录时跳过实时日志显示以提高性能
+        if getattr(self.flash_tab, 'is_flashing', False):
+            return
+        
         spaced = ' '.join([hexstr[i:i+2] for i in range(0, len(hexstr), 2)]).upper() + ' '
         bg_color = '#C1C1FF' if self.sendToggle else '#F0F0FF' # Alternating Blue
         html = f'<span style="background-color:{bg_color}; color:black;">{spaced}</span><br><br>'
         self.sendHexBuf.append(html)
+        self._trim_buffer(self.sendHexBuf, self.max_log_items)
         if self.sendFormat.currentText() == 'HEX':
             self.sendView.moveCursor(QTextCursor.MoveOperation.End)
             self.sendView.insertHtml(html)
 
     def _onAsciiSend(self, s: str):
+        # 烧录时跳过实时日志显示以提高性能
+        if getattr(self.flash_tab, 'is_flashing', False):
+            return
+        
         safe_s = s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br>')
         bg_color = '#C1C1FF' if self.sendToggle else '#F0F0FF'
         html = f'<span style="background-color:{bg_color}; color:black;">{safe_s}</span><br><br>'
         self.sendToggle = not self.sendToggle
         self.sendAsciiBuf.append(html)
+        self._trim_buffer(self.sendAsciiBuf, self.max_log_items)
         if self.sendFormat.currentText() == 'ASCII':
             self.sendView.moveCursor(QTextCursor.MoveOperation.End)
             self.sendView.insertHtml(html)
@@ -500,12 +550,14 @@ class MainWindow(QMainWindow):
             pass
 
     def _onRecvFormatChanged(self, text: str):
+        """切换接收格式显示，使用现有缓冲区"""
         self.recvView.clear()
         if text == 'HEX':
-            # Buffers now contain HTML fragments
+            # 显示HEX缓冲区内容
             full_html = ''.join(self.recvHexBuf)
             self.recvView.setHtml(full_html)
         else:
+            # 显示ASCII缓冲区内容
             full_html = ''.join(self.recvAsciiBuf)
             self.recvView.setHtml(full_html)
         self.recvView.moveCursor(QTextCursor.MoveOperation.End)
@@ -541,6 +593,7 @@ class MainWindow(QMainWindow):
         self.recvToggle = False
 
     def _onSendFormatChanged(self, text: str):
+        """切换发送格式显示，使用现有缓冲区"""
         self.sendView.clear()
         if text == 'HEX':
             full_html = ''.join(self.sendHexBuf)

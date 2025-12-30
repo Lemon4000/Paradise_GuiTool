@@ -90,10 +90,15 @@ class FlashTab(QWidget):
         self.hex_file_path = None
         self.is_flashing = False
         self.debug_mode = False
+        self.silent_mode = True  # 默认启用静默模式，提高烧录速度
         # 日志配色（固定）
         self.addr_color = "#F75BC6"  # 247,91,198
         self.hex_color = "#41FF41"   # 65,255,65
         self.ascii_color = "#FFB000" # 255,176,0
+        
+        # 日志缓冲区大小限制（防止内存无限增长）
+        self.max_log_items = 500  # 每个日志缓冲区最多保留500条
+        self.max_status_blocks = 200  # 状态日志最多保留200块（HTML blocks）
 
         self._init_ui()
 
@@ -359,6 +364,14 @@ class FlashTab(QWidget):
     def _get_colors(self):
         return self.addr_color, self.hex_color, self.ascii_color
 
+    def _is_logging_enabled(self) -> bool:
+        """检查是否应该启用日志输出（静默模式下烧录时禁用）"""
+        # 如果不在静默模式，总是启用日志
+        if not self.silent_mode:
+            return True
+        # 在静默模式下，烧录时禁用日志，提高性能
+        return not self.is_flashing
+
     def _guess_base_address(self, hex_str: str) -> int | None:
         """尝试从帧里解析 START 后的地址 (HEX:STARTXXXXXXXX)。失败则返回 None。"""
         try:
@@ -495,13 +508,15 @@ class FlashTab(QWidget):
         # 启用透传模式
         if self.serial_worker:
             self.serial_worker.setPassthroughMode(True)
+            # 启用信号抑制以提高烧录性能
+            self.serial_worker.setSuppressSignals(True)
 
         # 创建worker
         self.flash_worker = FlashWorker()
         self.flash_worker.init_retry_delay = self.spin_init_retry.value()  # 应用输入框的初始化重试延迟
         self.flash_worker.program_retry_delay = self.spin_program_retry.value()  # 应用编程重试延迟
-        # 设置日志启用回调
-        self.flash_worker.set_logging_enabled_callback(lambda: self.chk_enable_logging.isChecked())
+        # 设置日志启用回调（在静默模式下禁用日志以提高性能）
+        self.flash_worker.set_logging_enabled_callback(self._is_logging_enabled)
         self.flash_worker.sigProgress.connect(self.on_progress)
         self.flash_worker.sigCompleted.connect(self.on_completed)
         self.flash_worker.sigLog.connect(self.on_log)
@@ -533,9 +548,10 @@ class FlashTab(QWidget):
         self.btn_browse.setEnabled(True)
         self.btn_next_step.setEnabled(False)
 
-        # 禁用透传模式
+        # 禁用透传模式和信号抑制
         if self.serial_worker:
             self.serial_worker.setPassthroughMode(False)
+            self.serial_worker.setSuppressSignals(False)  # 恢复日志信号
 
         if success:
             QMessageBox.information(self, "成功", message)
@@ -580,6 +596,9 @@ class FlashTab(QWidget):
         
         html = f'<span style="color: {color}; {bold}">[{timestamp}] {message}</span>'
         self.status_log_view.append(html)
+        
+        # 定期裁剪状态日志，防止HTML过多导致卡顿
+        self._trim_status_log_view()
 
     def on_frame_sent(self, hex_str: str):
         """发送帧"""
@@ -607,6 +626,11 @@ class FlashTab(QWidget):
         head_hex = ' '.join([hex_str[i:i+2] for i in range(0, min(len(hex_str), 64), 2)]).upper()
         self.send_logs_ascii.append(
             f"[{timestamp}] TX len={data_len}B\nHEX头部: {head_hex}\nASCII预览: {preview}")
+        
+        # 裁剪缓冲区，防止无限增长
+        self._trim_log_buffer(self.send_logs_hex)
+        self._trim_log_buffer(self.send_logs_ascii)
+        self._trim_log_buffer(self.send_raw_frames)
 
         # 更新显示
         self._update_send_display()
@@ -637,6 +661,11 @@ class FlashTab(QWidget):
         head_hex = ' '.join([hex_str[i:i+2] for i in range(0, min(len(hex_str), 64), 2)]).upper()
         self.recv_logs_ascii.append(
             f"[{timestamp}] RX len={data_len}B\nHEX头部: {head_hex}\nASCII预览: {preview}")
+        
+        # 裁剪缓冲区，防止无限增长
+        self._trim_log_buffer(self.recv_logs_hex)
+        self._trim_log_buffer(self.recv_logs_ascii)
+        self._trim_log_buffer(self.recv_raw_frames)
 
         # 更新显示
         self._update_recv_display()
@@ -727,6 +756,8 @@ class FlashTab(QWidget):
         self.send_logs_hex.clear()
         self.recv_logs_ascii.clear()
         self.recv_logs_hex.clear()
+        self.send_raw_frames.clear()
+        self.recv_raw_frames.clear()
         self.send_log_view.clear()
         self.recv_log_view.clear()
         self.status_log_view.clear()

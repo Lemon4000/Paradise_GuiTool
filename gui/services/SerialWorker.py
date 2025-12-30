@@ -27,6 +27,7 @@ class SerialWorker(QObject):
         self._reading = False
         self._last_tx_crc = None
         self._passthrough_mode = False  # 透传模式，用于固件烧录
+        self._suppress_signals = False  # 信号抑制开关（烧录时禁用日志信号）
 
     def shutdown(self):
         try:
@@ -101,6 +102,10 @@ class SerialWorker(QObject):
     def setPassthroughMode(self, enabled: bool):
         """设置透传模式（固件烧录时使用）"""
         self._passthrough_mode = enabled
+
+    def setSuppressSignals(self, suppress: bool):
+        """设置信号抑制（烧录时禁用日志信号以提高性能）"""
+        self._suppress_signals = suppress
 
     def sendExit(self):
         if not self.port:

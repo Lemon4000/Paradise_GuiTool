@@ -137,13 +137,31 @@ class FlashWorker(QObject):
             self.consecutive_errors = 0
             self.verify_retries = 0
             self.debug_mode = debug_mode
-            self.crc_accumulate_count = 0  # 重置累加计数器
-            self.accumulated_crc_list = []  # 重置CRC值列表
+            
+            # 完全重置所有计数器和列表，防止累积
+            self.crc_accumulate_count = 0
+            self.accumulated_crc_list.clear()  # 使用clear()而不是重新赋值
             self.err_crc = 0
             self.err_format = 0
             self.err_data = 0
             self.err_total = 0
+            
+            # 重置所有时间戳
             self.flash_start_ts = time.time()
+            self.init_start_time = None
+            self.program_start_time = None
+            self.program_last_send_ts = None
+            self.program_send_start_ts = None
+            self.program_send_done_ts = None
+            self.program_first_recv_ts = None
+            self.program_first_recv_logged = False
+            self.program_frame_complete_ts = None
+            self.prev_block_done_ts = None
+            
+            # 重置其他状态
+            self.last_sent_crc = None
+            self.data_blocks = []
+            self.hex_parser = None
 
             # 读取配置
             self.cfg = proto._read_protocol_cfg()
@@ -231,6 +249,11 @@ class FlashWorker(QObject):
                 duration = time.time() - self.flash_start_ts
                 self._emit_log(f"烧录耗时 {duration:.2f} 秒")
                 self.flash_start_ts = None
+            
+            # 清理内存，释放资源
+            self.accumulated_crc_list.clear()
+            self.data_blocks = []
+            
             self.sigProgress.emit(100, "烧录成功")
             self.sigCompleted.emit(True, "固件烧录成功")
         elif new_state == FlashState.FAILED:
@@ -239,6 +262,11 @@ class FlashWorker(QObject):
                 duration = time.time() - self.flash_start_ts
                 self._emit_log(f"烧录耗时 {duration:.2f} 秒")
                 self.flash_start_ts = None
+            
+            # 清理内存，释放资源
+            self.accumulated_crc_list.clear()
+            self.data_blocks = []
+            
             self.sigCompleted.emit(False, "固件烧录失败")
 
     def _send_init_command(self, is_retry: bool = False):
@@ -882,7 +910,7 @@ class FlashWorker(QObject):
             self.consecutive_errors += 1
             max_retries = self.max_retries
             current_retries = self.retry_count
-            retry_delay = 3000  # 其他阶段延迟3000ms
+            retry_delay = 1000  # 其他阶段延迟3000ms
             
             # 检查连续错误是否过多（仅非VERIFY阶段）
             if self.consecutive_errors >= self.max_consecutive_errors:
@@ -946,4 +974,9 @@ class FlashWorker(QObject):
         self.timeout_timer.stop()
         self.state = FlashState.FAILED
         self._emit_log("烧录已中止")
+        
+        # 清理状态，释放内存
+        self.accumulated_crc_list.clear()
+        self.data_blocks = []
+        
         self.sigCompleted.emit(False, "烧录已被用户中止")
