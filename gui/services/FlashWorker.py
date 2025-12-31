@@ -247,7 +247,8 @@ class FlashWorker(QObject):
             self.timeout_timer.stop()
             if self.flash_start_ts is not None:
                 duration = time.time() - self.flash_start_ts
-                self._emit_log(f"烧录耗时 {duration:.2f} 秒")
+                # 无论日志是否开启，都输出烧录耗时
+                self.sigLog.emit(f"烧录耗时 {duration:.2f} 秒")
                 self.flash_start_ts = None
             
             # 清理内存，释放资源
@@ -260,7 +261,8 @@ class FlashWorker(QObject):
             self.timeout_timer.stop()
             if self.flash_start_ts is not None:
                 duration = time.time() - self.flash_start_ts
-                self._emit_log(f"烧录耗时 {duration:.2f} 秒")
+                # 无论日志是否开启，都输出烧录耗时
+                self.sigLog.emit(f"烧录耗时 {duration:.2f} 秒")
                 self.flash_start_ts = None
             
             # 清理内存，释放资源

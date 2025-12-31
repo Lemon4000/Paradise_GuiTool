@@ -570,6 +570,13 @@ class FlashTab(QWidget):
     
     def on_log(self, message: str):
         """状态日志消息，根据类型自动着色"""
+        # 关键信息（如烧录耗时）无论日志是否开启都要显示
+        is_critical = "烧录耗时" in message or "烧录已中止" in message
+        
+        # 如果禁用日志且不是关键信息，则不显示
+        if not self.chk_enable_logging.isChecked() and not is_critical:
+            return
+        
         import time
         timestamp = time.strftime("%H:%M:%S")
         
@@ -593,16 +600,16 @@ class FlashTab(QWidget):
             color = "#CCFF99"  # 浅绿 - 性能/调试信息
         elif "期望" in message or "实际" in message or "CRC" in message:
             color = "#FFCC99"  # 浅橙 - 校验信息
+        elif "烧录耗时" in message:
+            color = "#00FFFF"  # 青色 - 耗时统计
+            bold = "font-weight: bold;"
         
         html = f'<span style="color: {color}; {bold}">[{timestamp}] {message}</span>'
         self.status_log_view.append(html)
-        
-        # 定期裁剪状态日志，防止HTML过多导致卡顿
-        self._trim_status_log_view()
 
     def on_frame_sent(self, hex_str: str):
         """发送帧"""
-        # 如果禁用日志，则不显示任何内容
+        # 如果禁用日志，则不缓存任何数据
         if not self.chk_enable_logging.isChecked():
             return
             
@@ -614,7 +621,7 @@ class FlashTab(QWidget):
         except Exception:
             data_len = 0
 
-        # HEX格式（分行dump + CRC展示，带颜色）
+        # 更新缓冲区数据
         base = self._guess_base_address(hex_str)
         ac, hc, asc = self._get_colors()
         dump = self._hex_dump(hex_str, base_address=base, html_color=True, addr_color=ac, hex_color=hc, ascii_color=asc)
@@ -626,18 +633,13 @@ class FlashTab(QWidget):
         head_hex = ' '.join([hex_str[i:i+2] for i in range(0, min(len(hex_str), 64), 2)]).upper()
         self.send_logs_ascii.append(
             f"[{timestamp}] TX len={data_len}B\nHEX头部: {head_hex}\nASCII预览: {preview}")
-        
-        # 裁剪缓冲区，防止无限增长
-        self._trim_log_buffer(self.send_logs_hex)
-        self._trim_log_buffer(self.send_logs_ascii)
-        self._trim_log_buffer(self.send_raw_frames)
 
-        # 更新显示
+        # 更新UI显示
         self._update_send_display()
 
     def on_frame_recv(self, hex_str: str):
         """接收帧"""
-        # 如果禁用日志，则不显示任何内容
+        # 如果禁用日志，则不缓存任何数据
         if not self.chk_enable_logging.isChecked():
             return
             
@@ -649,7 +651,7 @@ class FlashTab(QWidget):
         except Exception:
             data_len = 0
 
-        # HEX格式（分行dump + CRC展示，带颜色）
+        # 更新缓冲区数据
         base = self._guess_base_address(hex_str)
         ac, hc, asc = self._get_colors()
         dump = self._hex_dump(hex_str, base_address=base, html_color=True, addr_color=ac, hex_color=hc, ascii_color=asc)
@@ -661,17 +663,16 @@ class FlashTab(QWidget):
         head_hex = ' '.join([hex_str[i:i+2] for i in range(0, min(len(hex_str), 64), 2)]).upper()
         self.recv_logs_ascii.append(
             f"[{timestamp}] RX len={data_len}B\nHEX头部: {head_hex}\nASCII预览: {preview}")
-        
-        # 裁剪缓冲区，防止无限增长
-        self._trim_log_buffer(self.recv_logs_hex)
-        self._trim_log_buffer(self.recv_logs_ascii)
-        self._trim_log_buffer(self.recv_raw_frames)
 
-        # 更新显示
+        # 更新UI显示
         self._update_recv_display()
 
     def on_error_detail(self, error_type: str, expected: str, received: str):
         """详细错误信息，按类型分别着色"""
+        # 关闭日志时不显示错误详情
+        if not self.chk_enable_logging.isChecked():
+            return
+        
         import time
         timestamp = time.strftime("%H:%M:%S")
 
@@ -693,6 +694,10 @@ class FlashTab(QWidget):
 
     def on_verify_ok(self, expected: str, received: str):
         """校验成功"""
+        # 关闭日志时不显示校验成功信息
+        if not self.chk_enable_logging.isChecked():
+            return
+        
         import time
         timestamp = time.strftime("%H:%M:%S")
         msg = f'<span style="color: #00FF00; font-weight: bold;">[{timestamp}] ✓ 校验成功!</span><br>'
